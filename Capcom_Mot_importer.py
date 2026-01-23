@@ -18,6 +18,29 @@ def apply_capcom_logic_v12_summary(filepath, armature_name="Node2"):
     LOC_PRECISION = 16.0 
     FACE_PRECISION = 256.0 
 
+# --- PULIZIA NODE1 ---
+    node1 = None
+    if arm and "Node1" in arm.pose.bones:
+        node1 = arm.pose.bones["Node1"]
+    else:
+        node1 = bpy.data.objects.get("Node1")
+    
+    if node1:
+        # Rimuovi tutti i keyframe
+        node1.animation_data_clear()
+        
+        # Reset ai valori default
+        node1.location = (0.0, 0.0, 0.0)
+        node1.rotation_euler = (0.0, 0.0, 0.0)
+        node1.scale = (1.0, 1.0, 1.0)
+        
+        print("Node1 ripulito e resettato")
+    
+    for i in range(28):  # Node0-Node29 per sicurezza
+        node = bpy.data.objects.get(f"Node{i}")
+        if node:
+            node.animation_data_clear()
+    
     loop_info = [] # Stores loop messages for the UI
 
     print(f"\n{'='*100}\nANIMATION TRACK SUMMARY\n{'='*100}")
@@ -50,9 +73,13 @@ def apply_capcom_logic_v12_summary(filepath, armature_name="Node2"):
                 
                 if h_size == 0 or h_size > file_size: break
                 header_byte = h_type & 0xFF
+
+                # Normalizza le varianti
+                if header_byte in [0x01, 0x02]:
+                    header_byte = 0x0A  # Tratta come LOWER
                 
                 # --- LOOP DETECTION ---
-                section_name = "LOWER" if header_byte == 0x02 else "UPPER" if header_byte == 0x0C else "FACE"
+                section_name = "LOWER" if header_byte == 0x0A else "UPPER" if header_byte == 0x0C else "FACE"
                 if h_loop != 0:
                     msg = f"LOOP DETECTED: {section_name} at frame {h_loopFrame}"
                     loop_info.append(msg)
