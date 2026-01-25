@@ -1,10 +1,10 @@
 bl_info = {
-    "name": "Capcom Outbreak Animation Importer (V1.3.1)",
+    "name": "Capcom Outbreak Animation Importer (V1.3.2)",
     "author": "Gemini & User",
-    "version": (1, 3, 1),
+    "version": (1, 3, 2),
     "blender": (3, 0, 0),
     "location": "File > Import > Capcom Outbreak Anim (.mot)",
-    "description": "V1.3.1: Fixed section detection using h_count byte",
+    "description": "V1.3.2: FPS 60 + IK Constraints setup",
     "category": "Import-Export",
 }
 
@@ -17,6 +17,11 @@ def apply_capcom_logic_v12_summary(filepath, armature_name="Node2"):
     ROT_PRECISION = 2607.5945876 
     LOC_PRECISION = 16.0 
     FACE_PRECISION = 256.0 
+    
+    # --- IMPOSTA FPS A 60 ---
+    bpy.context.scene.render.fps = 60
+    bpy.context.scene.render.fps_base = 1.0
+    print("FPS impostati a 60")
 
     # --- PULIZIA COMPLETA TUTTI I NODI ---
     if arm:
@@ -41,7 +46,7 @@ def apply_capcom_logic_v12_summary(filepath, armature_name="Node2"):
     print(f"\n{'='*100}\nANIMATION TRACK SUMMARY\n{'='*100}")
 
     track_map = {}
-    prefixes = [0x80120000, 0x80110000, 0x80000000]
+    prefixes = [0x80220000, 0x80120000, 0x80110000, 0x80000000]
     for p in prefixes:
         for b in [0x0001, 0x0008]: track_map[p | b] = ("ROT_X", "rotation_euler", 0)
         for b in [0x0002, 0x0010]: track_map[p | b] = ("ROT_Y", "rotation_euler", 1)
@@ -65,16 +70,11 @@ def apply_capcom_logic_v12_summary(filepath, armature_name="Node2"):
                 h_data = f.read(20)
                 h_type, h_count, h_size, h_loop, h_loopFrame = struct.unpack("<IIIIf", h_data)
                 
-                print(f"\n>>> SECTION at offset {current_section_offset:#x}")
-                print(f"    h_type: {h_type:#x}, h_count: {h_count}, h_size: {h_size}, h_loop: {h_loop}, h_loopFrame: {h_loopFrame}")
-                
                 if h_size == 0 or h_size > file_size: 
-                    print(f"    BREAK: h_size invalid ({h_size})")
                     break
                 
                 # Il byte che identifica la sezione è h_count!
                 section_byte = h_count & 0xFF
-                print(f"    section_byte: {section_byte:#x}")
                 
                 # --- IDENTIFICAZIONE SEZIONE ---
                 if section_byte == 0x0A:
@@ -88,9 +88,6 @@ def apply_capcom_logic_v12_summary(filepath, armature_name="Node2"):
                     global_node_idx = 22
                 else:
                     section_name = "UNKNOWN"
-                    
-                print(f"    Section identified as: {section_name}")
-                print(f"    global_node_idx starts at: {global_node_idx}")
                 
                 # --- LOOP DETECTION ---
                 if h_loop != 0:
@@ -103,15 +100,11 @@ def apply_capcom_logic_v12_summary(filepath, armature_name="Node2"):
 
                 for n in range(h_count):
                     if current_node_offset + 12 > section_end: 
-                        print(f"    Node {n}: BREAK - offset {current_node_offset:#x} exceeds section end {section_end:#x}")
                         break
                     f.seek(current_node_offset)
                     n_type, n_sub, n_size = struct.unpack("<III", f.read(12))
                     
-                    print(f"    Node {n} (will be Node{global_node_idx}): offset={current_node_offset:#x}, n_type={n_type:#x}, n_sub={n_sub}, n_size={n_size}")
-                    
                     if n_type < 0x80000000:
-                        print(f"      SKIP: n_type < 0x80000000")
                         current_node_offset += 4
                         continue
 
@@ -130,8 +123,6 @@ def apply_capcom_logic_v12_summary(filepath, armature_name="Node2"):
                         for s in range(n_sub):
                             f.seek(track_ptr)
                             t_type, t_keys, t_size = struct.unpack("<III", f.read(12))
-                            
-                            print(f"      Track {s}: t_type={t_type:#x}, t_keys={t_keys}, t_size={t_size}")
                             
                             if t_type in track_map:
                                 label, prop, idx = track_map[t_type]
@@ -170,6 +161,51 @@ def apply_capcom_logic_v12_summary(filepath, armature_name="Node2"):
                     global_node_idx += 1
                     
                 current_section_offset += h_size
+        
+        # --- SETUP INVERSE KINEMATICS ---
+        if arm:
+            print("\n--- Setting up Inverse Kinematics ---")
+            
+            # IK su Node9 (chain length 3)
+            if "Node9" in arm.pose.bones:
+                bone = arm.pose.bones["Node9"]
+                # Rimuovi IK esistenti per evitare duplicati
+                for c in bone.constraints:
+                    if c.type == 'IK':
+                        bone.constraints.remove(c)
+                ik = bone.constraints.new('IK')
+                ik.chain_count = 3
+                print(f"IK constraint added to Node9 (chain: 3)")
+            
+            # IK su Node6 (chain length 3)
+            if "Node6" in arm.pose.bones:
+                bone = arm.pose.bones["Node6"]
+                for c in bone.constraints:
+                    if c.type == 'IK':
+                        bone.constraints.remove(c)
+                ik = bone.constraints.new('IK')
+                ik.chain_count = 3
+                print(f"IK constraint added to Node6 (chain: 3)")
+            
+            # IK su Node19 (chain length 4)
+            if "Node19" in arm.pose.bones:
+                bone = arm.pose.bones["Node19"]
+                for c in bone.constraints:
+                    if c.type == 'IK':
+                        bone.constraints.remove(c)
+                ik = bone.constraints.new('IK')
+                ik.chain_count = 4
+                print(f"IK constraint added to Node19 (chain: 4)")
+            
+            # IK su Node15 (chain length 4)
+            if "Node15" in arm.pose.bones:
+                bone = arm.pose.bones["Node15"]
+                for c in bone.constraints:
+                    if c.type == 'IK':
+                        bone.constraints.remove(c)
+                ik = bone.constraints.new('IK')
+                ik.chain_count = 4
+                print(f"IK constraint added to Node15 (chain: 4)")
                 
         print(f"\n{'='*100}\nSUMMARY END\n{'='*100}")
         return True, loop_info
