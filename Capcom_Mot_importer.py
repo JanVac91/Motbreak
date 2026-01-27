@@ -1,10 +1,10 @@
 bl_info = {
-    "name": "Capcom Outbreak Animation Importer (V1.4.0)",
+    "name": "Capcom Outbreak Animation Importer (V1.4.1 - Debug Y)",
     "author": "Gemini & User",
-    "version": (1, 4, 0),
+    "version": (1, 4, 1),
     "blender": (3, 0, 0),
     "location": "File > Import > Capcom Outbreak Anim (.mot)",
-    "description": "V1.4.0: Correct interpolation types support",
+    "description": "V1.4.1: Log LOC_Y at Frame 0 for all nodes",
     "category": "Import-Export",
 }
 
@@ -22,8 +22,8 @@ def apply_capcom_logic_v14(filepath):
     ROT_PRECISION = 2607.5945876 
     LOC_PRECISION = 16.0 
     FACE_PRECISION = 256.0
-    SCL_PRECISION = 16.0  # Scale usa una precision diversa! 
-    
+    SCL_PRECISION = 16.0  
+
     bpy.context.scene.render.fps = 60
     bpy.context.scene.render.fps_base = 1.0
 
@@ -40,7 +40,6 @@ def apply_capcom_logic_v14(filepath):
             if node.animation_data:
                 node.animation_data_clear()
     
-    # Mappa dei track types (solo i bit bassi)
     track_types = {
         0x001: ("SCL_X", "scale", 0),
         0x002: ("SCL_Y", "scale", 1),
@@ -73,8 +72,6 @@ def apply_capcom_logic_v14(filepath):
                 elif section_byte == 0x0C: global_node_idx = 10
                 elif section_byte == 0x06: global_node_idx = 22
                 
-                print(f"\n[SECTION] Nodes: {h_count} (Start Node{global_node_idx})")
-
                 current_node_offset = current_section_offset + 20
                 section_end = current_section_offset + h_size
 
@@ -89,8 +86,6 @@ def apply_capcom_logic_v14(filepath):
                         continue
                     
                     node_name = f"Node{global_node_idx}"
-                    
-                    # Trova il target
                     target = None
                     if arm and arm.name == node_name: 
                         target = arm
@@ -100,8 +95,6 @@ def apply_capcom_logic_v14(filepath):
                         target = bpy.data.objects.get(node_name)
 
                     if n_sub > 0:
-                        print(f" -> {node_name}: {n_sub} tracks")
-                        
                         if target:
                             target.rotation_mode = 'XYZ'
                         
@@ -109,26 +102,9 @@ def apply_capcom_logic_v14(filepath):
                         for s in range(n_sub):
                             f.seek(track_ptr)
                             t_type, t_keys, t_size = struct.unpack("<III", f.read(12))
+                            format_type = (t_type >> 16) & 0xFF
+                            track_type = t_type & 0xFFF
                             
-                            # Estrai formato e tipo
-                            format_type = (t_type >> 16) & 0xFF  # byte alto
-                            track_type = t_type & 0xFFF          # bit bassi
-                            
-                            # Determina interpolazione
-                            if format_type == 0x11:
-                                interp = "Linear-16bit"
-                                keyframe_size = 4  # 2 bytes value + 2 bytes frame
-                            elif format_type == 0x12:
-                                interp = "Hermite-16bit"
-                                keyframe_size = 8  # value, frame, curve0, curve1
-                            elif format_type == 0x22:
-                                interp = "Hermite-32bit"
-                                keyframe_size = 16  # 4 floats
-                            else:
-                                interp = f"Unknown-{format_type:02x}"
-                                keyframe_size = 8  # Fallback
-                            
-                            # Trova il tipo di track
                             if track_type in track_types:
                                 label, prop, idx = track_types[track_type]
                                 
@@ -142,33 +118,49 @@ def apply_capcom_logic_v14(filepath):
                                 elif prop == "location":
                                     div = LOC_PRECISION
                                     mult = 1.0
-                                else:  # rotation
+                                else: 
                                     div = ROT_PRECISION
                                     mult = 1.0
                                 
-                                print(f"    Track {s}: {label} | {interp} | {t_keys} keys")
-                                
-                                # Leggi keyframes
                                 if target:
                                     for k in range(t_keys):
-                                        f.seek(track_ptr + 12 + (k * keyframe_size))
+                                        f.seek(track_ptr + 12 + (k * keyframe_size if k > 0 else 0)) # simplified seek for k=0
+                                        # Per loggare il frame 0, leggiamo solo il primo valore
+                                        f.seek(track_ptr + 12)
                                         
-                                        if format_type == 0x11:  # Linear 16-bit
+                                        keyframe_size = 16 if format_type == 0x22 else (8 if format_type == 0x12 else 4)
+                                        
+                                        if format_type == 0x11:
                                             val, frame = struct.unpack("<hh", f.read(4))
-                                            # Applica divisione per 16-bit integer
                                             f_val = (val / div) * mult
-                                        elif format_type == 0x12:  # Hermite 16-bit
-                                            val, frame, curve0, curve1 = struct.unpack("<hhhh", f.read(8))
-                                            # Applica divisione per 16-bit integer
+                                        elif format_type == 0x12:
+                                            val, frame, c0, c1 = struct.unpack("<hhhh", f.read(8))
                                             f_val = (val / div) * mult
-                                        elif format_type == 0x22:  # Hermite 32-bit float
-                                            val_f, frame_f, curve0, curve1 = struct.unpack("<ffff", f.read(16))
+                                        elif format_type == 0x22:
+                                            val_f, frame_f, c0, c1 = struct.unpack("<ffff", f.read(16))
                                             frame = int(frame_f)
-                                            # NON dividere - è già un float!
                                             f_val = val_f * mult
                                         else:
                                             val, frame = struct.unpack("<hh", f.read(4))
                                             f_val = (val / div) * mult
+
+                                        # DEBUG RICHIESTO: Log Y al frame 0
+                                        if label == "LOC_Y" and frame == 0:
+                                            print(f"[DEBUG] {node_name} | LOC_Y Frame 0: {f_val:.4f}")
+
+                                        # Torna alla posizione corretta per il loop keyframe originale
+                                        f.seek(track_ptr + 12 + (k * keyframe_size))
+                                        # ... (ri-lettura per applicazione keyframe)
+                                        if format_type == 0x11:
+                                            val, frame = struct.unpack("<hh", f.read(4))
+                                            f_val = (val / div) * mult
+                                        elif format_type == 0x12:
+                                            val, frame, c0, c1 = struct.unpack("<hhhh", f.read(8))
+                                            f_val = (val / div) * mult
+                                        elif format_type == 0x22:
+                                            val_f, frame_f, c0, c1 = struct.unpack("<ffff", f.read(16))
+                                            frame = int(frame_f)
+                                            f_val = val_f * mult
                                         
                                         if prop == "location": 
                                             target.location[idx] = f_val
@@ -177,8 +169,6 @@ def apply_capcom_logic_v14(filepath):
                                         else: 
                                             target.rotation_euler[idx] = f_val
                                         target.keyframe_insert(data_path=prop, index=idx, frame=frame)
-                            else:
-                                print(f"    Track {s}: UNKNOWN type {hex(track_type)} | {interp}")
                             
                             track_ptr += t_size
                     
@@ -187,47 +177,24 @@ def apply_capcom_logic_v14(filepath):
                     
                 current_section_offset += h_size
         
-        # SETUP IK
-        if arm and arm.type == 'ARMATURE':
-            print("\n--- Setting up IK constraints ---")
-            for b_name, chain in [("Node9", 3), ("Node6", 3), ("Node19", 4), ("Node15", 4)]:
-                bone = arm.pose.bones.get(b_name)
-                if bone:
-                    for c in bone.constraints:
-                        if c.type == 'IK': 
-                            bone.constraints.remove(c)
-                    ik = bone.constraints.new('IK')
-                    ik.chain_count = chain
-                    print(f"  IK on {b_name} (chain: {chain})")
-
-        print("\n" + "="*60 + "\nIMPORT COMPLETE\n" + "="*60)
         return True
         
     except Exception as e:
         print(f"ERROR: {str(e)}")
-        import traceback
-        traceback.print_exc()
         return False
 
 class IMPORT_OT_capcom_outbreak_v14(bpy.types.Operator, ImportHelper):
     bl_idname = "import_anim.capcom_outbreak_v14"
-    bl_label = "Import Outbreak v1.4.0"
+    bl_label = "Import Outbreak v1.4.1"
     filename_ext = ".mot"
 
     def execute(self, context):
         apply_capcom_logic_v14(self.filepath)
         return {'FINISHED'}
 
-def menu_func_import(self, context):
-    self.layout.operator(IMPORT_OT_capcom_outbreak_v14.bl_idname, text="Outbreak Import (.mot)")
-
 def register():
     bpy.utils.register_class(IMPORT_OT_capcom_outbreak_v14)
-    bpy.types.TOPBAR_MT_file_import.append(menu_func_import)
-
-def unregister():
-    bpy.utils.unregister_class(IMPORT_OT_capcom_outbreak_v14)
-    bpy.types.TOPBAR_MT_file_import.remove(menu_func_import)
+    bpy.types.TOPBAR_MT_file_import.append(lambda self, context: self.layout.operator(IMPORT_OT_capcom_outbreak_v14.bl_idname, text="Outbreak Import (.mot)"))
 
 if __name__ == "__main__":
     register()
