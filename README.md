@@ -69,21 +69,12 @@ Use the Swap function to replace the original block with your newly modified .mo
 Save the final file (it will automatically handle .bin or .mot formats).
 
 Known Limitations
-Root Bone: Movement on the root may not be handled correctly yet. ---> Fixed
 
-Scaling: Bone scaling is not yet fully managed.  -----> todo
-
-Facial Expressions: Data is readable, but eyes and eyebrows are not yet faithfully animated in Blender. ------> better
-
-Interpolation: Slight differences in curves might occur between Blender and the game engine.  ---> should be fixed
-
-Micro-jitter: You might notice some minor jittering on the pelvis.  ---> should be fixed
-
-Translation: We are still verifying if walking animations maintain proper translation on node2.
-
+Facial Expressions: Data is readable, but eyes and eyebrows are not yet faithfully animated in Blender. Sometimes jaw goes into the skull ------> to improve- In the Exporter the face won't be exported. 
 Multiple tracks: In work
+Export animation from zero: should be working but it's advisible to import any animation, delete all the frame (except the first one) and begin to work from there. It's better to have all the rotation for the first frame. 
+Importing hands animation: TODO
 
-Export animation from zero: in work
 
 If you encounter failed imports or strange glitches, check the Blender System Console (Step 2) and send the log to me on Discord!
 
