@@ -1,10 +1,10 @@
 bl_info = {
-    "name": "Capcom Outbreak Animation Importer (V1.4.1 - Debug Y)",
+    "name": "Capcom Outbreak Animation Importer (V1.4.2 - Debug Extended)",
     "author": "Gemini & User",
-    "version": (1, 4, 1),
+    "version": (1, 4, 2),
     "blender": (3, 0, 0),
     "location": "File > Import > Capcom Outbreak Anim (.mot)",
-    "description": "V1.4.1: Log LOC_Y at Frame 0 for all nodes",
+    "description": "V1.4.2: Extended logging for debugging",
     "category": "Import-Export",
 }
 
@@ -21,7 +21,7 @@ def apply_capcom_logic_v14(filepath):
     
     ROT_PRECISION = 2607.5945876 
     LOC_PRECISION = 16.0 
-    FACE_PRECISION = 256.0
+    FACE_PRECISION = 32768.0
     SCL_PRECISION = 16.0  
 
     bpy.context.scene.render.fps = 60
@@ -58,6 +58,7 @@ def apply_capcom_logic_v14(filepath):
             file_size = f.tell()
             current_section_offset = 0
             global_node_idx = 0
+            section_num = 0
 
             while current_section_offset + 20 <= file_size:
                 f.seek(current_section_offset)
@@ -68,9 +69,25 @@ def apply_capcom_logic_v14(filepath):
                     break
                 
                 section_byte = h_count & 0xFF
-                if section_byte == 0x0A: global_node_idx = 0
-                elif section_byte == 0x0C: global_node_idx = 10
-                elif section_byte == 0x06: global_node_idx = 22
+                section_name = "UNKNOWN"
+                if section_byte == 0x0A:
+                    global_node_idx = 0
+                    section_name = "LOWER (0x0A)"
+                elif section_byte == 0x0C:
+                    global_node_idx = 10
+                    section_name = "UPPER (0x0C)"
+                elif section_byte == 0x06:
+                    global_node_idx = 22
+                    section_name = "FACE (0x06)"
+                
+                section_num += 1
+                print(f"\n{'='*60}")
+                print(f"SECTION {section_num}: {section_name}")
+                print(f"  Offset: 0x{current_section_offset:08X}")
+                print(f"  Node count: {h_count}")
+                print(f"  Size: {h_size} bytes")
+                print(f"  Loop: {h_loop}, Loop Frame: {h_loopFrame}")
+                print(f"{'='*60}")
                 
                 current_node_offset = current_section_offset + 20
                 section_end = current_section_offset + h_size
@@ -81,18 +98,39 @@ def apply_capcom_logic_v14(filepath):
                     f.seek(current_node_offset)
                     n_type, n_sub, n_size = struct.unpack("<III", f.read(12))
                     
+                    node_name = f"Node{global_node_idx}"
+                    
+                    # Determina il tipo di target
+                    target = None
+                    target_type = "NOT FOUND"
+                    if arm and arm.name == node_name:
+                        target = arm
+                        target_type = "ARMATURE OBJECT"
+                    elif arm and arm.type == 'ARMATURE':
+                        target = arm.pose.bones.get(node_name)
+                        if target:
+                            target_type = "BONE"
+                    if not target:
+                        target = bpy.data.objects.get(node_name)
+                        if target:
+                            target_type = "SEPARATE OBJECT"
+                    
+                    print(f"\n  Node{global_node_idx} ({target_type}):")
+                    print(f"    n_type: 0x{n_type:08X}")
+                    print(f"    Tracks found: {n_sub}")
+                    print(f"    Node size: {n_size} bytes")
+                    
+                    # Se il nodo ha n_type < 0x80000000, skippa ma logga
                     if n_type < 0x80000000:
+                        print(f"    Operation: SKIPPED (invalid n_type)")
                         current_node_offset += 4
+                        global_node_idx += 1
                         continue
                     
-                    node_name = f"Node{global_node_idx}"
-                    target = None
-                    if arm and arm.name == node_name: 
-                        target = arm
-                    elif arm and arm.type == 'ARMATURE': 
-                        target = arm.pose.bones.get(node_name)
-                    if not target: 
-                        target = bpy.data.objects.get(node_name)
+                    # Variabili per tracciare frame range
+                    min_frame = float('inf')
+                    max_frame = float('-inf')
+                    track_list = []
 
                     if n_sub > 0:
                         if target:
@@ -107,6 +145,7 @@ def apply_capcom_logic_v14(filepath):
                             
                             if track_type in track_types:
                                 label, prop, idx = track_types[track_type]
+                                track_list.append(f"{label}({t_keys}keys)")
                                 
                                 is_facial = 23 <= global_node_idx <= 26
                                 if is_facial and prop == "location":
@@ -122,13 +161,11 @@ def apply_capcom_logic_v14(filepath):
                                     div = ROT_PRECISION
                                     mult = 1.0
                                 
+                                keyframe_size = 16 if format_type == 0x22 else (8 if format_type == 0x12 else 4)
+                                
                                 if target:
                                     for k in range(t_keys):
-                                        f.seek(track_ptr + 12 + (k * keyframe_size if k > 0 else 0)) # simplified seek for k=0
-                                        # Per loggare il frame 0, leggiamo solo il primo valore
-                                        f.seek(track_ptr + 12)
-                                        
-                                        keyframe_size = 16 if format_type == 0x22 else (8 if format_type == 0x12 else 4)
+                                        f.seek(track_ptr + 12 + (k * keyframe_size))
                                         
                                         if format_type == 0x11:
                                             val, frame = struct.unpack("<hh", f.read(4))
@@ -143,24 +180,12 @@ def apply_capcom_logic_v14(filepath):
                                         else:
                                             val, frame = struct.unpack("<hh", f.read(4))
                                             f_val = (val / div) * mult
-
-                                        # DEBUG RICHIESTO: Log Y al frame 0
-                                        if label == "LOC_Y" and frame == 0:
-                                            print(f"[DEBUG] {node_name} | LOC_Y Frame 0: {f_val:.4f}")
-
-                                        # Torna alla posizione corretta per il loop keyframe originale
-                                        f.seek(track_ptr + 12 + (k * keyframe_size))
-                                        # ... (ri-lettura per applicazione keyframe)
-                                        if format_type == 0x11:
-                                            val, frame = struct.unpack("<hh", f.read(4))
-                                            f_val = (val / div) * mult
-                                        elif format_type == 0x12:
-                                            val, frame, c0, c1 = struct.unpack("<hhhh", f.read(8))
-                                            f_val = (val / div) * mult
-                                        elif format_type == 0x22:
-                                            val_f, frame_f, c0, c1 = struct.unpack("<ffff", f.read(16))
-                                            frame = int(frame_f)
-                                            f_val = val_f * mult
+                                        
+                                        # Traccia frame range
+                                        if frame < min_frame:
+                                            min_frame = frame
+                                        if frame > max_frame:
+                                            max_frame = frame
                                         
                                         if prop == "location": 
                                             target.location[idx] = f_val
@@ -171,21 +196,37 @@ def apply_capcom_logic_v14(filepath):
                                         target.keyframe_insert(data_path=prop, index=idx, frame=frame)
                             
                             track_ptr += t_size
+                        
+                        # Stampa i dettagli delle tracce trovate
+                        if track_list:
+                            print(f"    Tracks: {', '.join(track_list)}")
+                        if min_frame != float('inf'):
+                            print(f"    Frame range: {int(min_frame)} → {int(max_frame)}")
+                            print(f"    Operation: KEYFRAMES INSERTED")
+                        else:
+                            print(f"    Operation: NO KEYFRAMES (empty tracks)")
+                    else:
+                        print(f"    Operation: EMPTY NODE (no tracks)")
                     
                     current_node_offset += n_size
                     global_node_idx += 1
                     
                 current_section_offset += h_size
         
+        print(f"\n{'='*60}")
+        print("IMPORT COMPLETED")
+        print(f"{'='*60}\n")
         return True
         
     except Exception as e:
         print(f"ERROR: {str(e)}")
+        import traceback
+        traceback.print_exc()
         return False
 
 class IMPORT_OT_capcom_outbreak_v14(bpy.types.Operator, ImportHelper):
     bl_idname = "import_anim.capcom_outbreak_v14"
-    bl_label = "Import Outbreak v1.4.1"
+    bl_label = "Import Outbreak v1.4.2"
     filename_ext = ".mot"
 
     def execute(self, context):
@@ -195,6 +236,9 @@ class IMPORT_OT_capcom_outbreak_v14(bpy.types.Operator, ImportHelper):
 def register():
     bpy.utils.register_class(IMPORT_OT_capcom_outbreak_v14)
     bpy.types.TOPBAR_MT_file_import.append(lambda self, context: self.layout.operator(IMPORT_OT_capcom_outbreak_v14.bl_idname, text="Outbreak Import (.mot)"))
+
+def unregister():
+    bpy.utils.unregister_class(IMPORT_OT_capcom_outbreak_v14)
 
 if __name__ == "__main__":
     register()
