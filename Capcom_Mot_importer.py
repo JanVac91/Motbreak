@@ -21,7 +21,7 @@ def apply_capcom_logic_v14(filepath):
     
     ROT_PRECISION = 2607.5945876 
     LOC_PRECISION = 16.0 
-    FACE_PRECISION = 32768.0
+    FACE_PRECISION = 256.0
     SCL_PRECISION = 16.0  
 
     bpy.context.scene.render.fps = 60
@@ -33,6 +33,17 @@ def apply_capcom_logic_v14(filepath):
         if arm.type == 'ARMATURE':
             for bone in arm.pose.bones:
                 bone.rotation_mode = 'XYZ'
+            
+            # CRITICAL: Disconnetti Node1 e Node2 PRIMA di importare
+            print("Disconnecting Node1 and Node2 from parents...")
+            bpy.context.view_layer.objects.active = arm
+            bpy.ops.object.mode_set(mode='EDIT')
+            for bone_name in ['Node1', 'Node2']:
+                edit_bone = arm.data.edit_bones.get(bone_name)
+                if edit_bone:
+                    edit_bone.use_connect = False
+                    print(f"  {bone_name}: disconnected")
+            bpy.ops.object.mode_set(mode='OBJECT')
     
     for i in range(30):
         node = bpy.data.objects.get(f"Node{i}")
