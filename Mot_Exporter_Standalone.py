@@ -1,10 +1,10 @@
 bl_info = {
-    "name": "Capcom Outbreak Animation Exporter (V2.3)",
+    "name": "Capcom Outbreak Animation Exporter (V2.5)",
     "author": "CarlVercetti & Claude",
-    "version": (2, 3, 0),
+    "version": (2, 5, 0),
     "blender": (3, 0, 0),
     "location": "File > Export > Capcom Outbreak Exporter (.mot)",
-    "description": "Export .mot with Node0/Node1 object animations",
+    "description": "Export .mot with both structure types + keyframe truncation",
     "category": "Import-Export",
 }
 
@@ -33,14 +33,33 @@ class EXPORT_OT_capcom_mot_v2(bpy.types.Operator, ExportHelper):
     )
 
     def execute(self, context):
-        arm = bpy.data.objects.get("Node2") or bpy.data.objects.get("Node0")
-        if not arm:
-            self.report({'ERROR'}, "Armature 'Node2' not found")
-            return {'CANCELLED'}
+        print("\n" + "="*60)
+        print("EXPORTING ANIMATION")
+        print("="*60)
+        
+        # Cerca l'armatura - può essere Node2 o Node0
+        arm = bpy.data.objects.get("Node2")
+        arm_is_node0 = False
+        
+        if not arm or arm.type != 'ARMATURE':
+            arm = bpy.data.objects.get("Node0")
+            if arm and arm.type == 'ARMATURE':
+                arm_is_node0 = True
+                print("STRUCTURE: Node0 is ARMATURE (alternative structure)")
+            else:
+                self.report({'ERROR'}, "No armature found (searched Node2 and Node0)")
+                return {'CANCELLED'}
+        else:
+            print("STRUCTURE: Node2 is ARMATURE (standard structure)")
+        
+        print(f"Armature: {arm.name}")
         
         # Trova il frame range
         frame_start = int(context.scene.frame_start)
         frame_end = int(context.scene.frame_end)
+        
+        print(f"Frame range: {frame_start} → {frame_end}")
+        print(f"Loop: {self.use_loop}, Loop Frame: {self.loop_frame}")
         
         ROT_PRECISION = 2607.5945876
         LOC_PRECISION = 16.0
@@ -64,7 +83,10 @@ class EXPORT_OT_capcom_mot_v2(bpy.types.Operator, ExportHelper):
         file_data = bytearray()
         
         # LOWER SECTION (Node0-9)
-        lower_section = self.build_section(arm, range(0, 10), track_defs, FORMAT_HERMITE_16, frame_start, frame_end, force_rotation=False)
+        print("\n" + "="*60)
+        print("BUILDING LOWER SECTION (Node0-9)")
+        print("="*60)
+        lower_section = self.build_section(arm, range(0, 10), track_defs, FORMAT_HERMITE_16, frame_start, frame_end, force_rotation=False, arm_is_node0=arm_is_node0)
         
         # Header LOWER
         h_type_lower = 0x80000002
@@ -73,16 +95,25 @@ class EXPORT_OT_capcom_mot_v2(bpy.types.Operator, ExportHelper):
         h_loop = 1 if self.use_loop else 0
         h_loopFrame = float(self.loop_frame) if self.use_loop else 0.0
         
+        print(f"\nLOWER header: type=0x{h_type_lower:08X}, count={h_count_lower}, size={h_size_lower}")
+        print(f"LOWER section: {len(lower_section)} bytes")
+        
         file_data.extend(struct.pack("<IIIIf", h_type_lower, h_count_lower, h_size_lower, h_loop, h_loopFrame))
         file_data.extend(lower_section)
         
         # UPPER SECTION (Node10-21)
-        upper_section = self.build_section(arm, range(10, 22), track_defs, FORMAT_HERMITE_16, frame_start, frame_end, force_rotation=True)
+        print("\n" + "="*60)
+        print("BUILDING UPPER SECTION (Node10-21)")
+        print("="*60)
+        upper_section = self.build_section(arm, range(10, 22), track_defs, FORMAT_HERMITE_16, frame_start, frame_end, force_rotation=True, arm_is_node0=arm_is_node0)
         
         # Header UPPER
         h_type_upper = 0x80000002
         h_count_upper = 0x0C
         h_size_upper = 20 + len(upper_section)
+        
+        print(f"\nUPPER header: type=0x{h_type_upper:08X}, count={h_count_upper}, size={h_size_upper}")
+        print(f"UPPER section: {len(upper_section)} bytes")
         
         file_data.extend(struct.pack("<IIIIf", h_type_upper, h_count_upper, h_size_upper, h_loop, h_loopFrame))
         file_data.extend(upper_section)
@@ -92,18 +123,25 @@ class EXPORT_OT_capcom_mot_v2(bpy.types.Operator, ExportHelper):
             with open(self.filepath, "wb") as f:
                 f.write(file_data)
             
-            print(f"\nExported: {len(file_data)} bytes")
-            print(f"LOWER section: {len(lower_section)} bytes")
-            print(f"UPPER section: {len(upper_section)} bytes")
+            print("\n" + "="*60)
+            print(f"EXPORT COMPLETE")
+            print(f"File: {self.filepath}")
+            print(f"Total: {len(file_data)} bytes")
+            print(f"LOWER: {len(lower_section)} bytes")
+            print(f"UPPER: {len(upper_section)} bytes")
+            print("="*60 + "\n")
             
             self.report({'INFO'}, f"Export successful: {len(file_data)} bytes")
             return {'FINISHED'}
             
         except Exception as e:
+            print(f"ERROR: {e}")
+            import traceback
+            traceback.print_exc()
             self.report({'ERROR'}, f"Export failed: {e}")
             return {'CANCELLED'}
     
-    def build_section(self, arm, node_range, track_defs, format_type, frame_start, frame_end, force_rotation=False):
+    def build_section(self, arm, node_range, track_defs, format_type, frame_start, frame_end, force_rotation=False, arm_is_node0=False):
         """Costruisce una sezione (LOWER o UPPER)"""
         section_data = bytearray()
         
@@ -114,34 +152,67 @@ class EXPORT_OT_capcom_mot_v2(bpy.types.Operator, ExportHelper):
             target = None
             action = None
             data_path_prefix = ""
+            target_type = "NOT FOUND"
             
-            if node_idx in [0, 1]:
-                # Node0 e Node1 sono oggetti separati
-                target = bpy.data.objects.get(node_name)
-                if target and target.animation_data and target.animation_data.action:
-                    action = target.animation_data.action
-                data_path_prefix = ""
-                
-            elif node_idx == 2:
-                # Node2 è l'armatura stessa
-                if arm.name == node_name:
+            if arm_is_node0:
+                # STRUTTURA ALTERNATIVA: Node0 = Armatura, Node1-27 = Bones
+                if node_idx == 0:
                     target = arm
+                    target_type = "ARMATURE OBJECT"
                     if arm.animation_data and arm.animation_data.action:
                         action = arm.animation_data.action
                     data_path_prefix = ""
-                    
+                else:
+                    # Node1-27 sono ossa dentro l'armatura Node0
+                    if arm.type == 'ARMATURE' and node_name in arm.pose.bones:
+                        target = arm.pose.bones[node_name]
+                        target_type = "BONE"
+                        if arm.animation_data and arm.animation_data.action:
+                            action = arm.animation_data.action
+                        data_path_prefix = f'pose.bones["{node_name}"].'
             else:
-                # Node3-21 sono ossa dentro l'armatura
-                if arm.type == 'ARMATURE' and node_name in arm.pose.bones:
-                    target = arm.pose.bones[node_name]
-                    if arm.animation_data and arm.animation_data.action:
-                        action = arm.animation_data.action
-                    data_path_prefix = f'pose.bones["{node_name}"].'
+                # STRUTTURA STANDARD: Node0/1 = Empty, Node2 = Armatura, Node3-27 = Bones
+                if node_idx in [0, 1]:
+                    target = bpy.data.objects.get(node_name)
+                    if target:
+                        target_type = "SEPARATE OBJECT"
+                        if target.animation_data and target.animation_data.action:
+                            action = target.animation_data.action
+                    data_path_prefix = ""
+                elif node_idx == 2:
+                    if arm.name == node_name:
+                        target = arm
+                        target_type = "ARMATURE OBJECT"
+                        if arm.animation_data and arm.animation_data.action:
+                            action = arm.animation_data.action
+                        data_path_prefix = ""
+                else:
+                    # Node3-21 sono ossa dentro l'armatura
+                    if arm.type == 'ARMATURE' and node_name in arm.pose.bones:
+                        target = arm.pose.bones[node_name]
+                        target_type = "BONE"
+                        if arm.animation_data and arm.animation_data.action:
+                            action = arm.animation_data.action
+                        data_path_prefix = f'pose.bones["{node_name}"].'
+            
+            print(f"\n{node_name} ({target_type}):")
+            if target:
+                print(f"  Target: {target.name if hasattr(target, 'name') else 'PoseBone'}")
+                print(f"  Action: {action.name if action else 'NONE'}")
+            else:
+                print(f"  Target: NOT FOUND")
             
             # Raccogli i track per questo nodo
             node_tracks = bytearray()
             n_type_flags = 0
             track_count = 0
+            track_details = []
+            
+            track_names = {
+                0x001: "SCL_X", 0x002: "SCL_Y", 0x004: "SCL_Z",
+                0x008: "ROT_X", 0x010: "ROT_Y", 0x020: "ROT_Z",
+                0x040: "LOC_X", 0x080: "LOC_Y", 0x100: "LOC_Z"
+            }
             
             for track_id, prop, axis, precision in track_defs:
                 # Costruisci il data path
@@ -160,15 +231,39 @@ class EXPORT_OT_capcom_mot_v2(bpy.types.Operator, ExportHelper):
                     has_keyframes = fcurve and len(fcurve.keyframe_points) > 0
                     should_export = has_keyframes or (force_rotation and is_bone and is_rotation)
                     
+                    track_name = track_names.get(track_id, f"UNKNOWN_{track_id:03X}")
+                    
                     if should_export:
                         # Crea il track
+                        keyframes_to_export = None
+                        
                         if has_keyframes:
-                            keyframes = fcurve.keyframe_points
+                            # Filtra keyframe nel range
+                            valid_kf = [kp for kp in fcurve.keyframe_points if frame_start <= kp.co[0] <= frame_end]
+                            
+                            if len(valid_kf) > 0:
+                                print(f"  {track_name}: {len(valid_kf)} keys (total {len(fcurve.keyframe_points)}, {len(fcurve.keyframe_points) - len(valid_kf)} truncated)")
+                                # Mostra primi 3 keyframe validi
+                                for i, kp in enumerate(valid_kf[:3]):
+                                    frame = int(kp.co[0])
+                                    value = kp.co[1]
+                                    value_scaled = int(round(value * precision))
+                                    print(f"    [{i}] Frame {frame}: value={value:.4f} → scaled={value_scaled}")
+                                if len(valid_kf) > 3:
+                                    print(f"    ... ({len(valid_kf) - 3} more)")
+                                track_details.append(f"{track_name}({len(valid_kf)}keys)")
+                                keyframes_to_export = valid_kf  # Usa i keyframe filtrati
+                            else:
+                                print(f"  {track_name}: SKIPPED (all {len(fcurve.keyframe_points)} keys outside range)")
+                                # Salta completamente questo track
+                                continue
                         else:
                             # Crea keyframes di default (0 e frame_end a valore 0)
-                            keyframes = None
+                            print(f"  {track_name}: DEFAULT (0 at {frame_start}, 0 at {frame_end})")
+                            track_details.append(f"{track_name}(default)")
+                            keyframes_to_export = None  # None = crea default
                         
-                        track_data = self.create_track(track_id, format_type, keyframes, precision, frame_start, frame_end)
+                        track_data = self.create_track(track_id, format_type, keyframes_to_export, precision, frame_start, frame_end)
                         if track_data:
                             node_tracks.extend(track_data)
                             track_count += 1
@@ -180,10 +275,13 @@ class EXPORT_OT_capcom_mot_v2(bpy.types.Operator, ExportHelper):
                 n_sub = track_count
                 n_size = 12 + len(node_tracks)
                 
+                print(f"  Node header: type=0x{n_type:08X}, tracks={n_sub}, size={n_size}")
+                
                 section_data.extend(struct.pack("<III", n_type, n_sub, n_size))
                 section_data.extend(node_tracks)
             else:
                 # Nodo vuoto
+                print(f"  Node header: EMPTY (0x80000000, 0, 12)")
                 section_data.extend(struct.pack("<III", 0x80000000, 0, 12))
         
         return section_data
@@ -234,7 +332,9 @@ class EXPORT_OT_capcom_mot_v2(bpy.types.Operator, ExportHelper):
             track_data.extend(struct.pack("<hhhh", 0, frame_end, 0, 0))
             return track_data
         
+        # I keyframe sono già filtrati da build_section
         num_keys = len(keyframes)
+        
         if num_keys == 0:
             return None
         
