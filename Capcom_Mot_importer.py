@@ -1,20 +1,25 @@
 bl_info = {
-    "name": "Capcom Outbreak Animation Importer (V1.4.2 - Debug Extended)",
+    "name": "Capcom Outbreak Animation Importer (V1.5)",
     "author": "Gemini & User",
-    "version": (1, 4, 2),
+    "version": (1, 5, 0),
     "blender": (3, 0, 0),
     "location": "File > Import > Capcom Outbreak Anim (.mot)",
-    "description": "V1.4.2: Extended logging for debugging",
+    "description": "V1.5: Append mode to add animation to current action",
     "category": "Import-Export",
 }
 
 import bpy
 import struct
 from bpy_extras.io_utils import ImportHelper
+from bpy.props import BoolProperty
 
-def apply_capcom_logic_v14(filepath):
+def apply_capcom_logic_v15(filepath, append_mode=False, frame_offset=0):
     print("\n" + "="*60)
     print(f"IMPORTING: {filepath}")
+    if append_mode:
+        print(f"MODE: APPEND (starting at frame {frame_offset})")
+    else:
+        print(f"MODE: REPLACE (clear existing animation)")
     print("="*60)
     
     arm = bpy.data.objects.get("Node2") or bpy.data.objects.get("Node0")
@@ -28,28 +33,26 @@ def apply_capcom_logic_v14(filepath):
     bpy.context.scene.render.fps_base = 1.0
 
     if arm:
-        if arm.animation_data:
-            arm.animation_data_clear()
-        if arm.type == 'ARMATURE':
-            for bone in arm.pose.bones:
-                bone.rotation_mode = 'XYZ'
-            
-            # CRITICAL: Disconnetti Node1 e Node2 PRIMA di importare
-            print("Disconnecting Node1 and Node2 from parents...")
-            bpy.context.view_layer.objects.active = arm
-            bpy.ops.object.mode_set(mode='EDIT')
-            for bone_name in ['Node1', 'Node2']:
-                edit_bone = arm.data.edit_bones.get(bone_name)
-                if edit_bone:
-                    edit_bone.use_connect = False
-                    print(f"  {bone_name}: disconnected")
-            bpy.ops.object.mode_set(mode='OBJECT')
+        # Solo in modalità REPLACE, pulisci le animazioni
+        if not append_mode:
+            if arm.animation_data:
+                arm.animation_data_clear()
+            if arm.type == 'ARMATURE':
+                for bone in arm.pose.bones:
+                    bone.rotation_mode = 'XYZ'
+        else:
+            # In modalità APPEND, assicurati che rotation_mode sia XYZ
+            if arm.type == 'ARMATURE':
+                for bone in arm.pose.bones:
+                    bone.rotation_mode = 'XYZ'
     
-    for i in range(30):
-        node = bpy.data.objects.get(f"Node{i}")
-        if node and node != arm:
-            if node.animation_data:
-                node.animation_data_clear()
+    # Solo in modalità REPLACE, pulisci animazioni Node0/Node1
+    if not append_mode:
+        for i in range(30):
+            node = bpy.data.objects.get(f"Node{i}")
+            if node and node != arm:
+                if node.animation_data:
+                    node.animation_data_clear()
     
     track_types = {
         0x001: ("SCL_X", "scale", 0),
@@ -192,11 +195,14 @@ def apply_capcom_logic_v14(filepath):
                                             val, frame = struct.unpack("<hh", f.read(4))
                                             f_val = (val / div) * mult
                                         
-                                        # Traccia frame range
-                                        if frame < min_frame:
-                                            min_frame = frame
-                                        if frame > max_frame:
-                                            max_frame = frame
+                                        # In modalità APPEND, aggiungi l'offset
+                                        adjusted_frame = frame + frame_offset
+                                        
+                                        # Traccia frame range (con offset)
+                                        if adjusted_frame < min_frame:
+                                            min_frame = adjusted_frame
+                                        if adjusted_frame > max_frame:
+                                            max_frame = adjusted_frame
                                         
                                         if prop == "location": 
                                             target.location[idx] = f_val
@@ -204,7 +210,7 @@ def apply_capcom_logic_v14(filepath):
                                             target.scale[idx] = f_val
                                         else: 
                                             target.rotation_euler[idx] = f_val
-                                        target.keyframe_insert(data_path=prop, index=idx, frame=frame)
+                                        target.keyframe_insert(data_path=prop, index=idx, frame=adjusted_frame)
                             
                             track_ptr += t_size
                         
@@ -213,7 +219,10 @@ def apply_capcom_logic_v14(filepath):
                             print(f"    Tracks: {', '.join(track_list)}")
                         if min_frame != float('inf'):
                             print(f"    Frame range: {int(min_frame)} → {int(max_frame)}")
-                            print(f"    Operation: KEYFRAMES INSERTED")
+                            if append_mode:
+                                print(f"    Operation: KEYFRAMES APPENDED (offset: +{frame_offset})")
+                            else:
+                                print(f"    Operation: KEYFRAMES INSERTED")
                         else:
                             print(f"    Operation: NO KEYFRAMES (empty tracks)")
                     else:
@@ -235,21 +244,37 @@ def apply_capcom_logic_v14(filepath):
         traceback.print_exc()
         return False
 
-class IMPORT_OT_capcom_outbreak_v14(bpy.types.Operator, ImportHelper):
-    bl_idname = "import_anim.capcom_outbreak_v14"
-    bl_label = "Import Outbreak v1.4.2"
+class IMPORT_OT_capcom_outbreak_v15(bpy.types.Operator, ImportHelper):
+    bl_idname = "import_anim.capcom_outbreak_v15"
+    bl_label = "Import Outbreak v1.5"
     filename_ext = ".mot"
+    
+    append_mode: BoolProperty(
+        name="Append Mode",
+        description="Add animation to current action starting at timeline cursor (don't clear existing animation)",
+        default=False,
+    )
 
     def execute(self, context):
-        apply_capcom_logic_v14(self.filepath)
+        # Ottieni la posizione corrente del cursore nella timeline
+        current_frame = context.scene.frame_current
+        
+        # Se append_mode è attivo, usa il frame corrente come offset
+        frame_offset = current_frame if self.append_mode else 0
+        
+        apply_capcom_logic_v15(self.filepath, append_mode=self.append_mode, frame_offset=frame_offset)
         return {'FINISHED'}
 
+def menu_func_import(self, context):
+    self.layout.operator(IMPORT_OT_capcom_outbreak_v15.bl_idname, text="Outbreak Import (.mot)")
+
 def register():
-    bpy.utils.register_class(IMPORT_OT_capcom_outbreak_v14)
-    bpy.types.TOPBAR_MT_file_import.append(lambda self, context: self.layout.operator(IMPORT_OT_capcom_outbreak_v14.bl_idname, text="Outbreak Import (.mot)"))
+    bpy.utils.register_class(IMPORT_OT_capcom_outbreak_v15)
+    bpy.types.TOPBAR_MT_file_import.append(menu_func_import)
 
 def unregister():
-    bpy.utils.unregister_class(IMPORT_OT_capcom_outbreak_v14)
+    bpy.utils.unregister_class(IMPORT_OT_capcom_outbreak_v15)
+    bpy.types.TOPBAR_MT_file_import.remove(menu_func_import)
 
 if __name__ == "__main__":
     register()
