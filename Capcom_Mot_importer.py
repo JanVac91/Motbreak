@@ -181,6 +181,9 @@ def apply_capcom_logic_v15(filepath, append_mode=False, frame_offset=0):
                                     for k in range(t_keys):
                                         f.seek(track_ptr + 12 + (k * keyframe_size))
                                         
+                                        c0 = 0
+                                        c1 = 0
+                                        
                                         if format_type == 0x11:
                                             val, frame = struct.unpack("<hh", f.read(4))
                                             f_val = (val / div) * mult
@@ -211,6 +214,60 @@ def apply_capcom_logic_v15(filepath, append_mode=False, frame_offset=0):
                                         else: 
                                             target.rotation_euler[idx] = f_val
                                         target.keyframe_insert(data_path=prop, index=idx, frame=adjusted_frame)
+                                        
+                                        # CRITICAL: Applica le tangenti alle handle
+                                        # Trova l'fcurve appena creata/modificata
+                                        if isinstance(target, bpy.types.Object):
+                                            # Oggetto separato o armatura
+                                            if not target.animation_data:
+                                                target.animation_data_create()
+                                            if not target.animation_data.action:
+                                                target.animation_data.action = bpy.data.actions.new(name=f"{target.name}Action")
+                                            action = target.animation_data.action
+                                            fcurve = action.fcurves.find(prop, index=idx)
+                                        else:
+                                            # PoseBone
+                                            if not arm.animation_data:
+                                                arm.animation_data_create()
+                                            if not arm.animation_data.action:
+                                                arm.animation_data.action = bpy.data.actions.new(name=f"{arm.name}Action")
+                                            action = arm.animation_data.action
+                                            data_path = f'pose.bones["{node_name}"].{prop}'
+                                            fcurve = action.fcurves.find(data_path, index=idx)
+                                        
+                                        if fcurve:
+                                            # Trova il keyframe appena inserito
+                                            kf = None
+                                            for keyframe in fcurve.keyframe_points:
+                                                if abs(keyframe.co[0] - adjusted_frame) < 0.01:
+                                                    kf = keyframe
+                                                    break
+                                            
+                                            if kf:
+                                                # Converti le tangenti da int16 scalate a slope Blender
+                                                # Le tangenti nel file sono: c = (delta_y_scaled) / delta_x
+                                                # dove delta_y_scaled = (delta_y_blender * precision)
+                                                # quindi: delta_y_blender = (c * delta_x) / precision
+                                                
+                                                # Imposta handle type a FREE per poterle modificare
+                                                kf.handle_left_type = 'FREE'
+                                                kf.handle_right_type = 'FREE'
+                                                
+                                                # Calcola le posizioni delle handle
+                                                # Usiamo delta_x = 1 frame (come nell'exporter)
+                                                delta_x = 1.0
+                                                
+                                                # Handle sinistra (in tangent = c0)
+                                                # c0 = (delta_y * precision) / delta_x
+                                                # delta_y = (c0 * delta_x) / precision
+                                                delta_y_left = (c0 * delta_x) / div
+                                                kf.handle_left[0] = kf.co[0] - delta_x
+                                                kf.handle_left[1] = kf.co[1] - delta_y_left
+                                                
+                                                # Handle destra (out tangent = c1)
+                                                delta_y_right = (c1 * delta_x) / div
+                                                kf.handle_right[0] = kf.co[0] + delta_x
+                                                kf.handle_right[1] = kf.co[1] + delta_y_right
                             
                             track_ptr += t_size
                         
