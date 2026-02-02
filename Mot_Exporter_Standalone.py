@@ -1,10 +1,10 @@
 bl_info = {
-    "name": "Capcom Outbreak Animation Exporter (V2.5)",
+    "name": "Capcom Outbreak Animation Exporter (V2.6)",
     "author": "CarlVercetti & Claude",
-    "version": (2, 5, 0),
+    "version": (2, 6, 0),
     "blender": (3, 0, 0),
     "location": "File > Export > Capcom Outbreak Exporter (.mot)",
-    "description": "Export .mot with both structure types + keyframe truncation",
+    "description": "Export .mot - Node0→Node2 only if Node2 is empty",
     "category": "Import-Export",
 }
 
@@ -145,6 +145,34 @@ class EXPORT_OT_capcom_mot_v2(bpy.types.Operator, ExportHelper):
         """Costruisce una sezione (LOWER o UPPER)"""
         section_data = bytearray()
         
+        # Pre-check: se Node0=armatura, controlla se Node2 ha già animazioni
+        node2_has_animations = False
+        node0_has_animations = False
+        
+        if arm_is_node0:
+            # Controlla Node2 (bone)
+            if arm.type == 'ARMATURE' and "Node2" in arm.pose.bones and arm.animation_data and arm.animation_data.action:
+                action = arm.animation_data.action
+                for fc in action.fcurves:
+                    if fc.data_path.startswith('pose.bones["Node2"].'):
+                        node2_has_animations = True
+                        break
+            
+            # Controlla Node0 (bone, non l'oggetto armatura)
+            if arm.type == 'ARMATURE' and "Node0" in arm.pose.bones and arm.animation_data and arm.animation_data.action:
+                action = arm.animation_data.action
+                for fc in action.fcurves:
+                    if fc.data_path.startswith('pose.bones["Node0"].'):
+                        node0_has_animations = True
+                        break
+            
+            if node0_has_animations and node2_has_animations:
+                print("\nWARNING: Both Node0 and Node2 have animations!")
+                print("  Node2 animations will be kept, Node0 animations will be ignored")
+            elif node0_has_animations and not node2_has_animations:
+                print("\nNOTE: Node0 has animations, Node2 is empty")
+                print("  Node0 animations will be moved to Node2 in the export")
+        
         for node_idx in node_range:
             node_name = f"Node{node_idx}"
             
@@ -153,17 +181,54 @@ class EXPORT_OT_capcom_mot_v2(bpy.types.Operator, ExportHelper):
             action = None
             data_path_prefix = ""
             target_type = "NOT FOUND"
+            write_empty_node0 = False
+            use_node0_for_node2 = False
             
             if arm_is_node0:
                 # STRUTTURA ALTERNATIVA: Node0 = Armatura, Node1-27 = Bones
                 if node_idx == 0:
+                    # Node0 viene scritto vuoto se le sue animazioni vanno in Node2
+                    if node0_has_animations and not node2_has_animations:
+                        print(f"\n{node_name} (ARMATURE OBJECT - WILL BE FORCED EMPTY):")
+                        print(f"  Note: Animations will be moved to Node2")
+                        write_empty_node0 = True
+                    else:
+                        # Node0 normale (o Node2 ha già animazioni)
+                        print(f"\n{node_name} (ARMATURE OBJECT):")
+                    
                     target = arm
                     target_type = "ARMATURE OBJECT"
                     if arm.animation_data and arm.animation_data.action:
                         action = arm.animation_data.action
                     data_path_prefix = ""
+                
+                elif node_idx == 2:
+                    # Node2: usa animazioni Node0 solo se Node2 vuoto e Node0 pieno
+                    if node0_has_animations and not node2_has_animations:
+                        print(f"\n{node_name} (BONE - receives Node0 bone animations):")
+                        # Usa le animazioni di Node0 bone
+                        if arm.type == 'ARMATURE' and "Node0" in arm.pose.bones:
+                            target = arm.pose.bones["Node0"]
+                            target_type = "BONE Node0 (writing as Node2)"
+                            if arm.animation_data and arm.animation_data.action:
+                                action = arm.animation_data.action
+                            data_path_prefix = 'pose.bones["Node0"].'
+                            use_node0_for_node2 = True
+                        else:
+                            target = None
+                    else:
+                        # Node2 normale (usa le sue animazioni o è vuoto)
+                        print(f"\n{node_name} (BONE):")
+                        if arm.type == 'ARMATURE' and node_name in arm.pose.bones:
+                            target = arm.pose.bones[node_name]
+                            target_type = "BONE"
+                            if arm.animation_data and arm.animation_data.action:
+                                action = arm.animation_data.action
+                            data_path_prefix = f'pose.bones["{node_name}"].'
+                
                 else:
-                    # Node1-27 sono ossa dentro l'armatura Node0
+                    # Node1, Node3-27 sono ossa dentro l'armatura Node0
+                    print(f"\n{node_name} (BONE):")
                     if arm.type == 'ARMATURE' and node_name in arm.pose.bones:
                         target = arm.pose.bones[node_name]
                         target_type = "BONE"
@@ -172,6 +237,7 @@ class EXPORT_OT_capcom_mot_v2(bpy.types.Operator, ExportHelper):
                         data_path_prefix = f'pose.bones["{node_name}"].'
             else:
                 # STRUTTURA STANDARD: Node0/1 = Empty, Node2 = Armatura, Node3-27 = Bones
+                print(f"\n{node_name}:")
                 if node_idx in [0, 1]:
                     target = bpy.data.objects.get(node_name)
                     if target:
@@ -195,10 +261,11 @@ class EXPORT_OT_capcom_mot_v2(bpy.types.Operator, ExportHelper):
                             action = arm.animation_data.action
                         data_path_prefix = f'pose.bones["{node_name}"].'
             
-            print(f"\n{node_name} ({target_type}):")
             if target:
-                print(f"  Target: {target.name if hasattr(target, 'name') else 'PoseBone'}")
+                print(f"  Target: {target.name if hasattr(target, 'name') else 'PoseBone'} ({target_type})")
                 print(f"  Action: {action.name if action else 'NONE'}")
+                if use_node0_for_node2:
+                    print(f"  Using Node0 bone animations")
             else:
                 print(f"  Target: NOT FOUND")
             
@@ -206,7 +273,6 @@ class EXPORT_OT_capcom_mot_v2(bpy.types.Operator, ExportHelper):
             node_tracks = bytearray()
             n_type_flags = 0
             track_count = 0
-            track_details = []
             
             track_names = {
                 0x001: "SCL_X", 0x002: "SCL_Y", 0x004: "SCL_Z",
@@ -242,26 +308,14 @@ class EXPORT_OT_capcom_mot_v2(bpy.types.Operator, ExportHelper):
                             valid_kf = [kp for kp in fcurve.keyframe_points if frame_start <= kp.co[0] <= frame_end]
                             
                             if len(valid_kf) > 0:
-                                print(f"  {track_name}: {len(valid_kf)} keys (total {len(fcurve.keyframe_points)}, {len(fcurve.keyframe_points) - len(valid_kf)} truncated)")
-                                # Mostra primi 3 keyframe validi
-                                for i, kp in enumerate(valid_kf[:3]):
-                                    frame = int(kp.co[0])
-                                    value = kp.co[1]
-                                    value_scaled = int(round(value * precision))
-                                    print(f"    [{i}] Frame {frame}: value={value:.4f} → scaled={value_scaled}")
-                                if len(valid_kf) > 3:
-                                    print(f"    ... ({len(valid_kf) - 3} more)")
-                                track_details.append(f"{track_name}({len(valid_kf)}keys)")
-                                keyframes_to_export = valid_kf  # Usa i keyframe filtrati
+                                print(f"  {track_name}: {len(valid_kf)} keys")
+                                keyframes_to_export = valid_kf
                             else:
-                                print(f"  {track_name}: SKIPPED (all {len(fcurve.keyframe_points)} keys outside range)")
-                                # Salta completamente questo track
                                 continue
                         else:
-                            # Crea keyframes di default (0 e frame_end a valore 0)
-                            print(f"  {track_name}: DEFAULT (0 at {frame_start}, 0 at {frame_end})")
-                            track_details.append(f"{track_name}(default)")
-                            keyframes_to_export = None  # None = crea default
+                            # Crea keyframes di default
+                            print(f"  {track_name}: DEFAULT")
+                            keyframes_to_export = None
                         
                         track_data = self.create_track(track_id, format_type, keyframes_to_export, precision, frame_start, frame_end)
                         if track_data:
@@ -270,47 +324,44 @@ class EXPORT_OT_capcom_mot_v2(bpy.types.Operator, ExportHelper):
                             n_type_flags |= track_id
             
             # Scrivi il nodo
-            if track_count > 0:
+            if write_empty_node0:
+                # Node0 sempre vuoto anche se ha track
+                print(f"  Node header: FORCED EMPTY")
+                section_data.extend(struct.pack("<III", 0x80000000, 0, 12))
+            elif track_count > 0:
                 n_type = 0x80000000 | n_type_flags
                 n_sub = track_count
                 n_size = 12 + len(node_tracks)
                 
-                print(f"  Node header: type=0x{n_type:08X}, tracks={n_sub}, size={n_size}")
+                print(f"  Node header: tracks={n_sub}, size={n_size}")
                 
                 section_data.extend(struct.pack("<III", n_type, n_sub, n_size))
                 section_data.extend(node_tracks)
             else:
-                # Nodo vuoto
-                print(f"  Node header: EMPTY (0x80000000, 0, 12)")
+                print(f"  Node header: EMPTY")
                 section_data.extend(struct.pack("<III", 0x80000000, 0, 12))
         
         return section_data
     
     def calculate_tangents(self, kp, precision):
         """Calcola tangenti c0 (in) e c1 (out) dalle handle di Blender"""
-        # Tangente IN (c0) - basata sulla handle sinistra
         delta_x_left = kp.co[0] - kp.handle_left[0]
         if delta_x_left != 0:
-            # Calcola slope in unità scalate (value già moltiplicato per precision)
             delta_y_left = (kp.co[1] - kp.handle_left[1]) * precision
             c0 = delta_y_left / delta_x_left
         else:
             c0 = 0.0
         
-        # Tangente OUT (c1) - basata sulla handle destra
         delta_x_right = kp.handle_right[0] - kp.co[0]
         if delta_x_right != 0:
-            # Calcola slope in unità scalate
             delta_y_right = (kp.handle_right[1] - kp.co[1]) * precision
             c1 = delta_y_right / delta_x_right
         else:
             c1 = 0.0
         
-        # Converti in int16
         c0_scaled = int(round(c0))
         c1_scaled = int(round(c1))
         
-        # Clamp a int16 range
         c0_scaled = max(-32768, min(32767, c0_scaled))
         c1_scaled = max(-32768, min(32767, c1_scaled))
         
@@ -318,9 +369,7 @@ class EXPORT_OT_capcom_mot_v2(bpy.types.Operator, ExportHelper):
     
     def create_track(self, track_id, format_type, keyframes, precision, frame_start, frame_end):
         """Crea un track con formato Hermite 16-bit"""
-        # Se non ci sono keyframes, crea default
         if keyframes is None:
-            # Default: valore 0 a frame_start e frame_end
             num_keys = 2
             t_type = 0x80000000 | (format_type << 16) | track_id
             t_keys = num_keys
@@ -332,13 +381,11 @@ class EXPORT_OT_capcom_mot_v2(bpy.types.Operator, ExportHelper):
             track_data.extend(struct.pack("<hhhh", 0, frame_end, 0, 0))
             return track_data
         
-        # I keyframe sono già filtrati da build_section
         num_keys = len(keyframes)
         
         if num_keys == 0:
             return None
         
-        # Track header
         t_type = 0x80000000 | (format_type << 16) | track_id
         t_keys = num_keys
         t_size = 12 + (num_keys * 8)
@@ -346,19 +393,15 @@ class EXPORT_OT_capcom_mot_v2(bpy.types.Operator, ExportHelper):
         track_data = bytearray()
         track_data.extend(struct.pack("<III", t_type, t_keys, t_size))
         
-        # Keyframes
         for kp in keyframes:
             frame = int(kp.co[0])
             value_float = kp.co[1]
             
-            # Converti valore in 16-bit integer
             value_scaled = int(round(value_float * precision))
             value_scaled = max(-32768, min(32767, value_scaled))
             
-            # Calcola tangenti dalle handle di Blender
             c0, c1 = self.calculate_tangents(kp, precision)
             
-            # Scrivi keyframe (16-bit Hermite)
             track_data.extend(struct.pack("<hhhh", value_scaled, frame, c0, c1))
         
         return track_data
