@@ -1,10 +1,10 @@
 bl_info = {
-    "name": "Capcom Outbreak Animation Importer (V1.5)",
+    "name": "Capcom Outbreak Animation Importer (V1.6)",
     "author": "Gemini & User",
-    "version": (1, 5, 0),
+    "version": (1, 6, 0),
     "blender": (3, 0, 0),
     "location": "File > Import > Capcom Outbreak Anim (.mot)",
-    "description": "V1.5: Append mode to add animation to current action",
+    "description": "V1.6: New Action option + Append mode",
     "category": "Import-Export",
 }
 
@@ -13,13 +13,19 @@ import struct
 from bpy_extras.io_utils import ImportHelper
 from bpy.props import BoolProperty
 
-def apply_capcom_logic_v15(filepath, append_mode=False, frame_offset=0):
+def apply_capcom_logic_v15(filepath, append_mode=False, frame_offset=0, create_new_action=False, ignore_face=False):
     print("\n" + "="*60)
     print(f"IMPORTING: {filepath}")
     if append_mode:
         print(f"MODE: APPEND (starting at frame {frame_offset})")
+    elif create_new_action:
+        print(f"MODE: NEW ACTION")
     else:
         print(f"MODE: REPLACE (clear existing animation)")
+    
+    if ignore_face:
+        print(f"FACE: IGNORED (skipping section 0x06)")
+    
     print("="*60)
     
     arm = bpy.data.objects.get("Node2") or bpy.data.objects.get("Node0")
@@ -33,8 +39,24 @@ def apply_capcom_logic_v15(filepath, append_mode=False, frame_offset=0):
     bpy.context.scene.render.fps_base = 1.0
 
     if arm:
+        # Se create_new_action, crea una nuova action
+        if create_new_action:
+            import os
+            action_name = os.path.splitext(os.path.basename(filepath))[0]
+            
+            if not arm.animation_data:
+                arm.animation_data_create()
+            
+            new_action = bpy.data.actions.new(name=action_name)
+            arm.animation_data.action = new_action
+            print(f"✅ Created new action: {action_name}")
+            
+            if arm.type == 'ARMATURE':
+                for bone in arm.pose.bones:
+                    bone.rotation_mode = 'XYZ'
+        
         # Solo in modalità REPLACE, pulisci le animazioni
-        if not append_mode:
+        elif not append_mode:
             if arm.animation_data:
                 arm.animation_data_clear()
             if arm.type == 'ARMATURE':
@@ -46,8 +68,8 @@ def apply_capcom_logic_v15(filepath, append_mode=False, frame_offset=0):
                 for bone in arm.pose.bones:
                     bone.rotation_mode = 'XYZ'
     
-    # Solo in modalità REPLACE, pulisci animazioni Node0/Node1
-    if not append_mode:
+    # Solo in modalità REPLACE (non append, non new action), pulisci animazioni Node0/Node1
+    if not append_mode and not create_new_action:
         for i in range(30):
             node = bpy.data.objects.get(f"Node{i}")
             if node and node != arm:
@@ -93,6 +115,16 @@ def apply_capcom_logic_v15(filepath, append_mode=False, frame_offset=0):
                 elif section_byte == 0x06:
                     global_node_idx = 22
                     section_name = "FACE (0x06)"
+                    
+                    # Se ignore_face è attivo, skippa questa sezione
+                    if ignore_face:
+                        print(f"\n{'='*60}")
+                        print(f"SECTION {section_num}: {section_name}")
+                        print(f"  SKIPPED (ignore_face = True)")
+                        print(f"{'='*60}")
+                        current_section_offset += h_size
+                        section_num += 1
+                        continue
                 
                 section_num += 1
                 print(f"\n{'='*60}")
@@ -303,12 +335,24 @@ def apply_capcom_logic_v15(filepath, append_mode=False, frame_offset=0):
 
 class IMPORT_OT_capcom_outbreak_v15(bpy.types.Operator, ImportHelper):
     bl_idname = "import_anim.capcom_outbreak_v15"
-    bl_label = "Import Outbreak v1.5"
+    bl_label = "Import Outbreak v1.6"
     filename_ext = ".mot"
+    
+    create_new_action: BoolProperty(
+        name="New Action",
+        description="Create a new action (keeps existing animations)",
+        default=False,
+    )
     
     append_mode: BoolProperty(
         name="Append Mode",
-        description="Add animation to current action starting at timeline cursor (don't clear existing animation)",
+        description="Add animation to current action starting at timeline cursor",
+        default=False,
+    )
+    
+    ignore_face: BoolProperty(
+        name="Ignore Face (0x06)",
+        description="Skip facial animation section (Node22-27)",
         default=False,
     )
 
@@ -319,7 +363,7 @@ class IMPORT_OT_capcom_outbreak_v15(bpy.types.Operator, ImportHelper):
         # Se append_mode è attivo, usa il frame corrente come offset
         frame_offset = current_frame if self.append_mode else 0
         
-        apply_capcom_logic_v15(self.filepath, append_mode=self.append_mode, frame_offset=frame_offset)
+        apply_capcom_logic_v15(self.filepath, append_mode=self.append_mode, frame_offset=frame_offset, create_new_action=self.create_new_action, ignore_face=self.ignore_face)
         return {'FINISHED'}
 
 def menu_func_import(self, context):
