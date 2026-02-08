@@ -1,10 +1,10 @@
 bl_info = {
-    "name": "Capcom Outbreak Animation Importer (V1.6)",
+    "name": "Capcom Outbreak Animation Importer (V1.7)",
     "author": "Gemini & User",
-    "version": (1, 6, 0),
+    "version": (1, 7, 0),
     "blender": (3, 0, 0),
     "location": "File > Import > Capcom Outbreak Anim (.mot)",
-    "description": "V1.6: New Action option + Append mode",
+    "description": "V1.7: Support for HANDS sections (0x04)",
     "category": "Import-Export",
 }
 
@@ -95,6 +95,7 @@ def apply_capcom_logic_v15(filepath, append_mode=False, frame_offset=0, create_n
             current_section_offset = 0
             global_node_idx = 0
             section_num = 0
+            hands_section_count = 0  # Contatore per sezioni HANDS
 
             while current_section_offset + 20 <= file_size:
                 f.seek(current_section_offset)
@@ -119,12 +120,25 @@ def apply_capcom_logic_v15(filepath, append_mode=False, frame_offset=0, create_n
                     # Se ignore_face è attivo, skippa questa sezione
                     if ignore_face:
                         print(f"\n{'='*60}")
-                        print(f"SECTION {section_num}: {section_name}")
+                        print(f"SECTION {section_num + 1}: {section_name}")
                         print(f"  SKIPPED (ignore_face = True)")
                         print(f"{'='*60}")
                         current_section_offset += h_size
                         section_num += 1
                         continue
+                elif section_byte == 0x04:
+                    # HANDS section - prima 0x04 = Node28-31, seconda 0x04 = Node32-35
+                    if hands_section_count == 0:
+                        global_node_idx = 28
+                        section_name = "HANDS_L (0x04)"
+                    elif hands_section_count == 1:
+                        global_node_idx = 32
+                        section_name = "HANDS_R (0x04)"
+                    else:
+                        # Ulteriori sezioni 0x04 continuano da dove si è fermato
+                        section_name = f"HANDS_{hands_section_count} (0x04)"
+                    
+                    hands_section_count += 1
                 
                 section_num += 1
                 print(f"\n{'='*60}")
@@ -335,7 +349,7 @@ def apply_capcom_logic_v15(filepath, append_mode=False, frame_offset=0, create_n
 
 class IMPORT_OT_capcom_outbreak_v15(bpy.types.Operator, ImportHelper):
     bl_idname = "import_anim.capcom_outbreak_v15"
-    bl_label = "Import Outbreak v1.6"
+    bl_label = "Import Outbreak v1.7"
     filename_ext = ".mot"
     
     create_new_action: BoolProperty(
