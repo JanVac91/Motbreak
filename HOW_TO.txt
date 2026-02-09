@@ -1,0 +1,182 @@
+# Capcom Resident Evil Outbreak - Animation Tools
+## User Guide
+
+---
+
+## 🚀 GETTING STARTED
+
+### Installation
+1. Open Blender (3.0 or newer)
+2. Go to `Edit → Preferences → Add-ons → Install`
+3. Install both files:
+   - `mot_importer_v1_8.py` (for importing)
+   - `mot_exporter_v2_8.py` (for exporting)
+4. Enable both add-ons by checking their boxes
+
+---
+
+## 📐 SKELETON SETUP
+
+### Required Structure
+Your character skeleton must have bones named exactly:
+```
+Node0
+Node1
+Node2
+Node3
+Node4
+... (up to Node21 for human characters)
+```
+
+**Important:**
+- Node0 must be the armature (the main object)
+- Node1-21 must be bones inside the armature
+- Names are case-sensitive!
+
+### Project Settings
+Before animating, set these in Blender:
+1. **Frame Rate:** Go to `Output Properties → Frame Rate → 60`
+2. **Rotation Mode:** Select all bones → Press `R` → Choose `XYZ Euler`
+
+---
+
+## 🎨 ANIMATING
+
+### Basic Rules
+1. **Root Motion (walking/running):**
+   - Put forward/backward movement on **Node0** (Y location)
+   - Put left/right movement on **Node0** (X location)
+
+2. **Body Rotations:**
+   - Animate **Node2-21** normally (head, arms, legs, etc.)
+   - Use rotation keyframes
+
+3. **Interpolation:**
+   - For location (movement): Set to **Linear** interpolation
+     - Select keyframes in Graph Editor
+     - Press `T` → `Linear`
+   - For rotation: Use default (Bezier is fine)
+
+### Timeline
+- Set your animation range in the Timeline
+  - Example: `Start Frame: 0`, `End Frame: 120`
+- The exporter will only export keyframes within this range
+
+---
+
+## 📥 IMPORTING ANIMATIONS
+
+### Basic Import
+1. `File → Import → Outbreak Import (.mot)`
+2. Select your `.mot` file
+3. Click **Import**
+
+This will replace any existing animation.
+
+### Import Options
+
+**☐ New Action**
+- Check this to keep your current animation
+- Creates a separate animation you can switch between
+- **When to use:** You want to import multiple animations (idle, walk, run, etc.)
+
+**☐ Append Mode**
+- Check this to add animation after your current animation
+- Move the timeline cursor to where you want it to start
+- **When to use:** You want to chain animations together (walk → run)
+
+**☐ Ignore Face (0x06)**
+- Check this to skip facial animations
+- **When to use:** Your character doesn't have facial bones
+
+**☑ Monster: First Section Only**
+- Leave this checked (default)
+- Prevents glitchy animations on monsters
+- **When to use:** Always for monster animations
+
+---
+
+## 📤 EXPORTING ANIMATIONS
+
+### Basic Export
+1. Set your frame range in the Timeline
+   - `Start Frame: 0`
+   - `End Frame: 120` (or your animation length)
+2. `File → Export → Capcom Outbreak (.mot)`
+3. Choose where to save
+4. Click **Export**
+
+### Export Options
+
+**☐ Enable Loop**
+- Check this for animations that repeat (walk, run, idle)
+- Leave unchecked for one-time animations (pick up object, open door)
+
+**Loop Frame**
+- Usually set to `0`
+- This is the frame where the animation loops back to
+
+---
+
+
+## 💡 COMMON WORKFLOWS
+
+### Workflow 1: Import a Game Animation
+```
+1. File → Import → Outbreak Import (.mot)
+2. Select walk.mot
+3. Click Import
+4. Animation is now on your character!
+```
+
+### Workflow 2: Import Multiple Animations
+```
+1. Import idle.mot (normal import)
+2. Import walk.mot
+   ✓ Check "New Action"
+3. Import run.mot
+   ✓ Check "New Action"
+
+
+---
+
+## ⚠️ COMMON PROBLEMS
+
+### "Character slides on the ground"
+**Fix:**
+1. Make sure Node1 has the Z location animation
+2. Set location keyframes to Linear interpolation:
+   - Graph Editor → Select location curves
+   - Press `T` → Linear
+
+---
+
+## 📋 QUICK CHECKLIST
+
+Before exporting:
+- [ ] Frame rate is 60 FPS
+- [ ] Rotation mode is XYZ Euler (all bones)
+- [ ] Timeline range is correct (Start/End frames)
+- [ ] Node1 has forward movement, Node2 the offset movement
+- [ ] Location keyframes are Linear interpolation
+- [ ] Loop setting is correct (on for walk/run, off for actions)
+
+---
+
+## 🎓 TIPS
+
+1. **Test early!** Export and test in-game frequently, don't wait until the animation is perfect
+2. **Name your actions** - Makes it easier to find animations later
+3. **Use Linear for movement** - Bezier curves cause sliding
+4. **Keep it simple** - Start with simple animations before complex ones
+5. **Save often** - Blender can crash, save your work!
+
+---
+
+## 🆘 NEED HELP?
+
+If something doesn't work:
+1. Check this guide first
+2. Look at the Console (Windows → Toggle System Console)
+3. Make sure your skeleton has the correct bone names
+4. Verify frame rate is 60 FPS and rotation mode is XYZ Euler
