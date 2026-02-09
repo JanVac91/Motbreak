@@ -5,6 +5,8 @@
 Resident Evil Outbreak: Animation Modding Guide (v0.8)
 Follow these steps to extract, modify, and re-import animations using Blender and the SwapAnimation Tool.
 
+- Tested on Blender 4.01
+
 1. Character Setup
 Import your character model into Blender. Ensure you are using the default skeleton provided by obTool (with bones named node0, node1, node2, etc.). The scripts are specifically designed to work with this bone hierarchy.
 
