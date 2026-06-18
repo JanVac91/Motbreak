@@ -1,10 +1,10 @@
 bl_info = {
-    "name": "Capcom Outbreak Animation Exporter (V2.6)",
+    "name": "Capcom Outbreak Animation Exporter (V2.9)",
     "author": "CarlVercetti & Claude",
-    "version": (2, 6, 0),
+    "version": (2, 9, 0),
     "blender": (3, 0, 0),
     "location": "File > Export > Capcom Outbreak Exporter (.mot)",
-    "description": "Export .mot - Node0→Node2 only if Node2 is empty",
+    "description": "Export .mot - Node1/Node2 bone redirect support",
     "category": "Import-Export",
 }
 
@@ -31,6 +31,12 @@ class EXPORT_OT_capcom_mot_v2(bpy.types.Operator, ExportHelper):
         default=0,
         min=0,
     )
+    
+    export_face: BoolProperty(
+        name="Export Face (Node23-27)",
+        description="Include facial animation section (0x06) in the export",
+        default=False,
+    )
 
     def execute(self, context):
         print("\n" + "="*60)
@@ -54,6 +60,37 @@ class EXPORT_OT_capcom_mot_v2(bpy.types.Operator, ExportHelper):
         
         print(f"Armature: {arm.name}")
         
+        # ====== NODE1/NODE2 BONE STRUCTURE DETECTION ======
+        # Se Node1 e Node2 sono entrambi bones, l'importer ha redirectato
+        # tutti i canali location (orizzontale da Node1 + verticale da Node2)
+        # su Node1, applicando una correzione visiva di -node2_y_offset
+        # all'asse Y (per evitare che il modello "voli" in Blender).
+        #
+        # In export dobbiamo fare l'inverso:
+        # - Node1.LOC_X/Z -> letti da pose.bones["Node1"].location[0/2], invariati
+        # - Node2.LOC_Y   -> letto da pose.bones["Node1"].location[1],
+        #                    poi += node2_y_offset per ripristinare il valore
+        #                    originale che il gioco si aspetta
+        node1_node2_are_bones = False
+        node2_y_offset = 0.0
+        
+        if arm.type == 'ARMATURE' and "Node1" in arm.pose.bones and "Node2" in arm.pose.bones:
+            node1_node2_are_bones = True
+            print("STRUCTURE: Node1 and Node2 are BONES")
+            
+            current_mode = arm.mode
+            bpy.context.view_layer.objects.active = arm
+            bpy.ops.object.mode_set(mode='EDIT')
+            eb2 = arm.data.edit_bones.get("Node2")
+            if eb2:
+                node2_y_offset = eb2.head.y
+            bpy.ops.object.mode_set(mode=current_mode)
+            
+            print(f"  -> Node1 holds combined LOC (Node1 XZ + Node2 Y)")
+            print(f"  -> Node2.LOC_Y export offset: +{node2_y_offset:.4f}")
+        else:
+            print("STRUCTURE: Node1/Node2 are separate objects (no redirect)")
+        
         # Trova il frame range
         frame_start = int(context.scene.frame_start)
         frame_end = int(context.scene.frame_end)
@@ -64,6 +101,8 @@ class EXPORT_OT_capcom_mot_v2(bpy.types.Operator, ExportHelper):
         ROT_PRECISION = 2607.5945876
         LOC_PRECISION = 16.0
         SCL_PRECISION = 16.0
+        FACE_PRECISION = 256.0  # Node23, Node25
+        FACE_PRECISION_ALT = 512.0  # Node24, Node26
         
         # Definizione track types (formato 0x12 = Hermite 16-bit)
         FORMAT_HERMITE_16 = 0x0012
@@ -86,7 +125,7 @@ class EXPORT_OT_capcom_mot_v2(bpy.types.Operator, ExportHelper):
         print("\n" + "="*60)
         print("BUILDING LOWER SECTION (Node0-9)")
         print("="*60)
-        lower_section = self.build_section(arm, range(0, 10), track_defs, FORMAT_HERMITE_16, frame_start, frame_end, force_rotation=False, arm_is_node0=arm_is_node0)
+        lower_section = self.build_section(arm, range(0, 10), track_defs, FORMAT_HERMITE_16, frame_start, frame_end, force_rotation=False, arm_is_node0=arm_is_node0, node1_node2_are_bones=node1_node2_are_bones, node2_y_offset=node2_y_offset, face_precision=FACE_PRECISION, face_precision_alt=FACE_PRECISION_ALT)
         
         # Header LOWER
         h_type_lower = 0x80000002
@@ -105,7 +144,7 @@ class EXPORT_OT_capcom_mot_v2(bpy.types.Operator, ExportHelper):
         print("\n" + "="*60)
         print("BUILDING UPPER SECTION (Node10-21)")
         print("="*60)
-        upper_section = self.build_section(arm, range(10, 22), track_defs, FORMAT_HERMITE_16, frame_start, frame_end, force_rotation=True, arm_is_node0=arm_is_node0)
+        upper_section = self.build_section(arm, range(10, 22), track_defs, FORMAT_HERMITE_16, frame_start, frame_end, force_rotation=True, arm_is_node0=arm_is_node0, node1_node2_are_bones=node1_node2_are_bones, node2_y_offset=node2_y_offset, face_precision=FACE_PRECISION, face_precision_alt=FACE_PRECISION_ALT)
         
         # Header UPPER
         h_type_upper = 0x80000002
@@ -118,6 +157,24 @@ class EXPORT_OT_capcom_mot_v2(bpy.types.Operator, ExportHelper):
         file_data.extend(struct.pack("<IIIIf", h_type_upper, h_count_upper, h_size_upper, h_loop, h_loopFrame))
         file_data.extend(upper_section)
         
+        # FACE SECTION (Node22-27) - opzionale
+        face_section = bytearray()
+        if self.export_face:
+            print("\n" + "="*60)
+            print("BUILDING FACE SECTION (Node22-27)")
+            print("="*60)
+            face_section = self.build_section(arm, range(22, 28), track_defs, FORMAT_HERMITE_16, frame_start, frame_end, force_rotation=False, arm_is_node0=arm_is_node0, node1_node2_are_bones=node1_node2_are_bones, node2_y_offset=node2_y_offset, face_precision=FACE_PRECISION, face_precision_alt=FACE_PRECISION_ALT)
+            
+            h_type_face = 0x80000002
+            h_count_face = 0x06
+            h_size_face = 20 + len(face_section)
+            
+            print(f"\nFACE header: type=0x{h_type_face:08X}, count={h_count_face}, size={h_size_face}")
+            print(f"FACE section: {len(face_section)} bytes")
+            
+            file_data.extend(struct.pack("<IIIIf", h_type_face, h_count_face, h_size_face, h_loop, h_loopFrame))
+            file_data.extend(face_section)
+        
         # Salva file
         try:
             with open(self.filepath, "wb") as f:
@@ -129,6 +186,8 @@ class EXPORT_OT_capcom_mot_v2(bpy.types.Operator, ExportHelper):
             print(f"Total: {len(file_data)} bytes")
             print(f"LOWER: {len(lower_section)} bytes")
             print(f"UPPER: {len(upper_section)} bytes")
+            if self.export_face:
+                print(f"FACE: {len(face_section)} bytes")
             print("="*60 + "\n")
             
             self.report({'INFO'}, f"Export successful: {len(file_data)} bytes")
@@ -141,7 +200,7 @@ class EXPORT_OT_capcom_mot_v2(bpy.types.Operator, ExportHelper):
             self.report({'ERROR'}, f"Export failed: {e}")
             return {'CANCELLED'}
     
-    def build_section(self, arm, node_range, track_defs, format_type, frame_start, frame_end, force_rotation=False, arm_is_node0=False):
+    def build_section(self, arm, node_range, track_defs, format_type, frame_start, frame_end, force_rotation=False, arm_is_node0=False, node1_node2_are_bones=False, node2_y_offset=0.0, face_precision=256.0, face_precision_alt=512.0):
         """Costruisce una sezione (LOWER o UPPER)"""
         section_data = bytearray()
         
@@ -183,6 +242,24 @@ class EXPORT_OT_capcom_mot_v2(bpy.types.Operator, ExportHelper):
             target_type = "NOT FOUND"
             write_empty_node0 = False
             use_node0_for_node2 = False
+            value_offset_per_axis = {0: 0.0, 1: 0.0, 2: 0.0}  # offset da aggiungere al valore export per asse
+            
+            # ====== NODE1/NODE2 BONE REDIRECT FLAGS ======
+            # Se Node1 e Node2 sono entrambi bones, l'importer ha scritto
+            # TUTTI i canali location (Node1.XZ + Node2.Y) su pose.bones["Node1"].
+            # Il redirect viene applicato SOLO al prop "location" nel loop
+            # dei track_defs sotto; rotazioni/scale restano sul target normale.
+            loc_redirect_source_bone = None  # nome del bone da cui leggere "location"
+            loc_axes_to_export = None        # set di assi location da esportare per questo nodo
+            
+            if node1_node2_are_bones and node_idx in (1, 2) and arm.type == 'ARMATURE' and "Node1" in arm.pose.bones:
+                loc_redirect_source_bone = "Node1"
+                if node_idx == 1:
+                    loc_axes_to_export = {0, 2}  # X, Z
+                else:  # node_idx == 2
+                    loc_axes_to_export = {1}     # Y
+                    value_offset_per_axis[1] = node2_y_offset
+                    print(f"\n{node_name}: LOC_Y redirected from Node1, offset +{node2_y_offset:.4f}")
             
             if arm_is_node0:
                 # STRUTTURA ALTERNATIVA: Node0 = Armatura, Node1-27 = Bones
@@ -281,6 +358,41 @@ class EXPORT_OT_capcom_mot_v2(bpy.types.Operator, ExportHelper):
             }
             
             for track_id, prop, axis, precision in track_defs:
+                # Le location facciali (Node23-26) usano FACE_PRECISION,
+                # ma Node24/26 usano face_precision_alt (512.0) invece di
+                # face_precision (256.0) usato da Node23/25.
+                if prop == "location" and 23 <= node_idx <= 26:
+                    precision = face_precision_alt if node_idx in (24, 26) else face_precision
+                
+                # ====== LOCATION REDIRECT (Node1/Node2 bone structure) ======
+                if prop == "location" and loc_axes_to_export is not None:
+                    if axis not in loc_axes_to_export:
+                        # Questo asse location non appartiene a questo nodo, skip
+                        continue
+                    # Leggi da pose.bones[loc_redirect_source_bone].location
+                    redirect_bone = arm.pose.bones.get(loc_redirect_source_bone)
+                    redirect_action = arm.animation_data.action if (arm.animation_data and arm.animation_data.action) else None
+                    
+                    fcurve = None
+                    if redirect_action:
+                        fcurve = redirect_action.fcurves.find(f'pose.bones["{loc_redirect_source_bone}"].location', index=axis)
+                    
+                    has_keyframes = fcurve and len(fcurve.keyframe_points) > 0
+                    should_export = has_keyframes
+                    track_name = track_names.get(track_id, f"UNKNOWN_{track_id:03X}")
+                    
+                    if should_export:
+                        valid_kf = [kp for kp in fcurve.keyframe_points if frame_start <= kp.co[0] <= frame_end]
+                        if len(valid_kf) > 0:
+                            print(f"  {track_name}: {len(valid_kf)} keys (from {loc_redirect_source_bone}, offset={value_offset_per_axis[axis]:+.4f})")
+                            track_data = self.create_track(track_id, format_type, valid_kf, precision, frame_start, frame_end, value_offset=value_offset_per_axis[axis])
+                            if track_data:
+                                node_tracks.extend(track_data)
+                                track_count += 1
+                                n_type_flags |= track_id
+                    continue
+                # ====== END LOCATION REDIRECT ======
+                
                 # Costruisci il data path
                 if target and hasattr(target, prop):
                     data_path = f"{data_path_prefix}{prop}" if data_path_prefix else prop
@@ -317,7 +429,19 @@ class EXPORT_OT_capcom_mot_v2(bpy.types.Operator, ExportHelper):
                             print(f"  {track_name}: DEFAULT")
                             keyframes_to_export = None
                         
-                        track_data = self.create_track(track_id, format_type, keyframes_to_export, precision, frame_start, frame_end)
+                        # Le location facciali (Node23-26) vengono invertite di
+                        # segno in lettura (mult=-1.0 nell'importer); per il
+                        # round-trip corretto applichiamo lo stesso mult qui.
+                        # Inversione di segno solo su X/Z (axis 0,2) per le
+                        # location facciali; Y (axis 1) mantiene il segno
+                        # originale, coerente con l'importer aggiornato.
+                        # Tutte le location facciali (Node23-26, tutti gli assi)
+                        # usano segno invertito, coerente con l'importer che
+                        # legge con div=-precision (es. -256, -512).
+                        is_facial_location = (23 <= node_idx <= 26) and prop == "location"
+                        export_mult = -1.0 if is_facial_location else 1.0
+                        
+                        track_data = self.create_track(track_id, format_type, keyframes_to_export, precision, frame_start, frame_end, value_mult=export_mult)
                         if track_data:
                             node_tracks.extend(track_data)
                             track_count += 1
@@ -343,18 +467,20 @@ class EXPORT_OT_capcom_mot_v2(bpy.types.Operator, ExportHelper):
         
         return section_data
     
-    def calculate_tangents(self, kp, precision):
-        """Calcola tangenti c0 (in) e c1 (out) dalle handle di Blender"""
+    def calculate_tangents(self, kp, precision, value_mult=1.0):
+        """Calcola tangenti c0 (in) e c1 (out) dalle handle di Blender.
+        value_mult applica lo stesso segno usato per il valore principale
+        (es. -1.0 per le location facciali Node23-26)."""
         delta_x_left = kp.co[0] - kp.handle_left[0]
         if delta_x_left != 0:
-            delta_y_left = (kp.co[1] - kp.handle_left[1]) * precision
+            delta_y_left = (kp.co[1] - kp.handle_left[1]) * value_mult * precision
             c0 = delta_y_left / delta_x_left
         else:
             c0 = 0.0
         
         delta_x_right = kp.handle_right[0] - kp.co[0]
         if delta_x_right != 0:
-            delta_y_right = (kp.handle_right[1] - kp.co[1]) * precision
+            delta_y_right = (kp.handle_right[1] - kp.co[1]) * value_mult * precision
             c1 = delta_y_right / delta_x_right
         else:
             c1 = 0.0
@@ -367,8 +493,14 @@ class EXPORT_OT_capcom_mot_v2(bpy.types.Operator, ExportHelper):
         
         return c0_scaled, c1_scaled
     
-    def create_track(self, track_id, format_type, keyframes, precision, frame_start, frame_end):
-        """Crea un track con formato Hermite 16-bit"""
+    def create_track(self, track_id, format_type, keyframes, precision, frame_start, frame_end, value_offset=0.0, value_mult=1.0):
+        """Crea un track con formato Hermite 16-bit.
+        value_offset viene aggiunto al valore (in unità Blender) prima della
+        conversione in formato scalato - usato per ripristinare l'offset
+        rimosso dall'importer per Node1/Node2 bone redirect.
+        value_mult moltiplica il valore prima della conversione - usato per
+        invertire il segno delle location facciali (Node23-26), coerente
+        con mult=-1.0 applicato dall'importer in lettura."""
         if keyframes is None:
             num_keys = 2
             t_type = 0x80000000 | (format_type << 16) | track_id
@@ -377,8 +509,10 @@ class EXPORT_OT_capcom_mot_v2(bpy.types.Operator, ExportHelper):
             
             track_data = bytearray()
             track_data.extend(struct.pack("<III", t_type, t_keys, t_size))
-            track_data.extend(struct.pack("<hhhh", 0, frame_start, 0, 0))
-            track_data.extend(struct.pack("<hhhh", 0, frame_end, 0, 0))
+            offset_scaled = int(round(value_offset * value_mult * precision))
+            offset_scaled = max(-32768, min(32767, offset_scaled))
+            track_data.extend(struct.pack("<hhhh", offset_scaled, frame_start, 0, 0))
+            track_data.extend(struct.pack("<hhhh", offset_scaled, frame_end, 0, 0))
             return track_data
         
         num_keys = len(keyframes)
@@ -395,12 +529,12 @@ class EXPORT_OT_capcom_mot_v2(bpy.types.Operator, ExportHelper):
         
         for kp in keyframes:
             frame = int(kp.co[0])
-            value_float = kp.co[1]
+            value_float = (kp.co[1] + value_offset) * value_mult
             
             value_scaled = int(round(value_float * precision))
             value_scaled = max(-32768, min(32767, value_scaled))
             
-            c0, c1 = self.calculate_tangents(kp, precision)
+            c0, c1 = self.calculate_tangents(kp, precision, value_mult)
             
             track_data.extend(struct.pack("<hhhh", value_scaled, frame, c0, c1))
         

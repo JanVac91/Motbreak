@@ -36,7 +36,7 @@ Node4
 ### Project Settings
 Before animating, set these in Blender:
 1. **Frame Rate:** Go to `Output Properties → Frame Rate → 60`
-2. **Rotation Mode:** Select all bones → Press `R` → Choose `XYZ Euler`
+2. **Rotation Mode:** Select all bones → Press `CTRL + R` → Choose `XYZ Euler`
 
 ---
 
@@ -44,8 +44,9 @@ Before animating, set these in Blender:
 
 ### Basic Rules
 1. **Root Motion (walking/running):**
-   - Put forward/backward movement on **Node0** (Y location)
-   - Put left/right movement on **Node0** (X location)
+   - Put  vertical movement on **Node2** (Y location)
+	- put horizontal movement on Node1
+
 
 2. **Body Rotations:**
    - Animate **Node2-21** normally (head, arms, legs, etc.)
