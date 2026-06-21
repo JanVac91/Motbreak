@@ -1,10 +1,10 @@
 bl_info = {
-    "name": "Capcom Outbreak Animation Exporter (V2.9)",
+    "name": "Capcom Outbreak Animation Exporter (V2.11)",
     "author": "CarlVercetti & Claude",
-    "version": (2, 9, 0),
+    "version": (2, 11, 0),
     "blender": (3, 0, 0),
     "location": "File > Export > Capcom Outbreak Exporter (.mot)",
-    "description": "Export .mot - Node1/Node2 bone redirect support",
+    "description": "V2.11: Auto Loop reads loop/loop_frame from imported action",
     "category": "Import-Export",
 }
 
@@ -21,15 +21,21 @@ class EXPORT_OT_capcom_mot_v2(bpy.types.Operator, ExportHelper):
     
     use_loop: BoolProperty(
         name="Enable Loop",
-        description="Enable animation loop",
+        description="Enable animation loop (ignored if 'Auto Loop from Import' is checked)",
         default=False,
     )
     
     loop_frame: IntProperty(
         name="Loop Frame",
-        description="Frame where loop starts",
+        description="Frame where loop starts (ignored if 'Auto Loop from Import' is checked)",
         default=0,
         min=0,
+    )
+    
+    auto_loop: BoolProperty(
+        name="Auto Loop (from Import)",
+        description="Read loop/loop_frame automatically from the action's saved import data, ignoring the fields above",
+        default=True,
     )
     
     export_face: BoolProperty(
@@ -60,23 +66,40 @@ class EXPORT_OT_capcom_mot_v2(bpy.types.Operator, ExportHelper):
         
         print(f"Armature: {arm.name}")
         
-        # ====== NODE1/NODE2 BONE STRUCTURE DETECTION ======
-        # Se Node1 e Node2 sono entrambi bones, l'importer ha redirectato
-        # tutti i canali location (orizzontale da Node1 + verticale da Node2)
-        # su Node1, applicando una correzione visiva di -node2_y_offset
-        # all'asse Y (per evitare che il modello "voli" in Blender).
-        #
-        # In export dobbiamo fare l'inverso:
-        # - Node1.LOC_X/Z -> letti da pose.bones["Node1"].location[0/2], invariati
-        # - Node2.LOC_Y   -> letto da pose.bones["Node1"].location[1],
-        #                    poi += node2_y_offset per ripristinare il valore
-        #                    originale che il gioco si aspetta
+        # ====== AUTO LOOP (read from action custom properties) ======
+        # Se auto_loop è attivo, prova a leggere "capcom_loop" e
+        # "capcom_loop_frame" dalla custom property dell'action corrente
+        # (salvate dall'importer v1.13+). Se non trovate, usa i valori
+        # manuali use_loop/loop_frame come fallback.
+        effective_use_loop = self.use_loop
+        effective_loop_frame = self.loop_frame
+        
+        if self.auto_loop:
+            action = arm.animation_data.action if arm.animation_data else None
+            if action and "capcom_loop" in action and "capcom_loop_frame" in action:
+                effective_use_loop = bool(action["capcom_loop"])
+                effective_loop_frame = int(action["capcom_loop_frame"])
+                print(f"AUTO LOOP: read from action '{action.name}' -> loop={effective_use_loop}, loop_frame={effective_loop_frame}")
+            else:
+                print(f"AUTO LOOP: no saved loop data on action, falling back to manual fields (loop={effective_use_loop}, loop_frame={effective_loop_frame})")
+        # ===============================================
+        
+        # ====== NODE1/NODE2 BONE STRUCTURE DETECTION (HD models) ======
+        # Se Node1 e Node2 sono entrambi bones (HD model), l'importer NON
+        # fa più alcun redirect: ogni bone scrive sulle proprie keyframe.
+        # L'unica correzione rimasta è su Node2.LOC_Y, che in Blender viene
+        # mostrato con un offset visivo di -node2_y_offset (per evitare che
+        # il modello "voli", dato che Node2 ha use_connect=False e la sua
+        # location è relativa all'head in rest pose). In export sommiamo
+        # +node2_y_offset SOLO a Node2.LOC_Y per ripristinare il valore
+        # originale che il gioco si aspetta. Tutti gli altri canali
+        # (Node1.LOC_X/Z, Node2.LOC_X/Z, rotazioni, scale) sono invariati.
         node1_node2_are_bones = False
         node2_y_offset = 0.0
         
         if arm.type == 'ARMATURE' and "Node1" in arm.pose.bones and "Node2" in arm.pose.bones:
             node1_node2_are_bones = True
-            print("STRUCTURE: Node1 and Node2 are BONES")
+            print("STRUCTURE: HD model (Node1 and Node2 are BONES)")
             
             current_mode = arm.mode
             bpy.context.view_layer.objects.active = arm
@@ -86,22 +109,22 @@ class EXPORT_OT_capcom_mot_v2(bpy.types.Operator, ExportHelper):
                 node2_y_offset = eb2.head.y
             bpy.ops.object.mode_set(mode=current_mode)
             
-            print(f"  -> Node1 holds combined LOC (Node1 XZ + Node2 Y)")
-            print(f"  -> Node2.LOC_Y export offset: +{node2_y_offset:.4f}")
+            print(f"  -> No redirect: Node1 and Node2 export their own keyframes")
+            print(f"  -> Node2.LOC_Y offset restore: +{node2_y_offset:.4f}")
         else:
-            print("STRUCTURE: Node1/Node2 are separate objects (no redirect)")
+            print("STRUCTURE: STANDARD model (Node1/Node2 are separate objects)")
         
         # Trova il frame range
         frame_start = int(context.scene.frame_start)
         frame_end = int(context.scene.frame_end)
         
         print(f"Frame range: {frame_start} → {frame_end}")
-        print(f"Loop: {self.use_loop}, Loop Frame: {self.loop_frame}")
+        print(f"Loop: {effective_use_loop}, Loop Frame: {effective_loop_frame}")
         
         ROT_PRECISION = 2607.5945876
         LOC_PRECISION = 16.0
         SCL_PRECISION = 16.0
-        FACE_PRECISION = 256.0  # Node23, Node25
+        FACE_PRECISION = 256.0  # Node23, Node25, Node27
         FACE_PRECISION_ALT = 512.0  # Node24, Node26
         
         # Definizione track types (formato 0x12 = Hermite 16-bit)
@@ -131,8 +154,8 @@ class EXPORT_OT_capcom_mot_v2(bpy.types.Operator, ExportHelper):
         h_type_lower = 0x80000002
         h_count_lower = 0x0A
         h_size_lower = 20 + len(lower_section)
-        h_loop = 1 if self.use_loop else 0
-        h_loopFrame = float(self.loop_frame) if self.use_loop else 0.0
+        h_loop = 1 if effective_use_loop else 0
+        h_loopFrame = float(effective_loop_frame) if effective_use_loop else 0.0
         
         print(f"\nLOWER header: type=0x{h_type_lower:08X}, count={h_count_lower}, size={h_size_lower}")
         print(f"LOWER section: {len(lower_section)} bytes")
@@ -242,24 +265,16 @@ class EXPORT_OT_capcom_mot_v2(bpy.types.Operator, ExportHelper):
             target_type = "NOT FOUND"
             write_empty_node0 = False
             use_node0_for_node2 = False
-            value_offset_per_axis = {0: 0.0, 1: 0.0, 2: 0.0}  # offset da aggiungere al valore export per asse
             
-            # ====== NODE1/NODE2 BONE REDIRECT FLAGS ======
-            # Se Node1 e Node2 sono entrambi bones, l'importer ha scritto
-            # TUTTI i canali location (Node1.XZ + Node2.Y) su pose.bones["Node1"].
-            # Il redirect viene applicato SOLO al prop "location" nel loop
-            # dei track_defs sotto; rotazioni/scale restano sul target normale.
-            loc_redirect_source_bone = None  # nome del bone da cui leggere "location"
-            loc_axes_to_export = None        # set di assi location da esportare per questo nodo
-            
-            if node1_node2_are_bones and node_idx in (1, 2) and arm.type == 'ARMATURE' and "Node1" in arm.pose.bones:
-                loc_redirect_source_bone = "Node1"
-                if node_idx == 1:
-                    loc_axes_to_export = {0, 2}  # X, Z
-                else:  # node_idx == 2
-                    loc_axes_to_export = {1}     # Y
-                    value_offset_per_axis[1] = node2_y_offset
-                    print(f"\n{node_name}: LOC_Y redirected from Node1, offset +{node2_y_offset:.4f}")
+            # ====== NODE2.LOC_Y OFFSET RESTORE (HD models only) ======
+            # Nessun redirect: Node1 e Node2 leggono dalle proprie fcurve
+            # normalmente (gestito più sotto dal flusso standard). L'unica
+            # eccezione è l'offset da sommare a Node2.LOC_Y (axis=1) per
+            # ripristinare il valore originale del file.
+            value_offset_per_axis = {0: 0.0, 1: 0.0, 2: 0.0}
+            if node1_node2_are_bones and node_idx == 2:
+                value_offset_per_axis[1] = node2_y_offset
+            # ===========================================================
             
             if arm_is_node0:
                 # STRUTTURA ALTERNATIVA: Node0 = Armatura, Node1-27 = Bones
@@ -329,6 +344,13 @@ class EXPORT_OT_capcom_mot_v2(bpy.types.Operator, ExportHelper):
                         if arm.animation_data and arm.animation_data.action:
                             action = arm.animation_data.action
                         data_path_prefix = ""
+                    elif arm.type == 'ARMATURE' and node_name in arm.pose.bones:
+                        # HD model: Node2 è un bone, non l'armatura stessa
+                        target = arm.pose.bones[node_name]
+                        target_type = "BONE"
+                        if arm.animation_data and arm.animation_data.action:
+                            action = arm.animation_data.action
+                        data_path_prefix = f'pose.bones["{node_name}"].'
                 else:
                     # Node3-21 sono ossa dentro l'armatura
                     if arm.type == 'ARMATURE' and node_name in arm.pose.bones:
@@ -358,40 +380,11 @@ class EXPORT_OT_capcom_mot_v2(bpy.types.Operator, ExportHelper):
             }
             
             for track_id, prop, axis, precision in track_defs:
-                # Le location facciali (Node23-26) usano FACE_PRECISION,
+                # Le location facciali (Node23-27) usano FACE_PRECISION,
                 # ma Node24/26 usano face_precision_alt (512.0) invece di
-                # face_precision (256.0) usato da Node23/25.
-                if prop == "location" and 23 <= node_idx <= 26:
+                # face_precision (256.0) usato da Node23/25/27.
+                if prop == "location" and 23 <= node_idx <= 27:
                     precision = face_precision_alt if node_idx in (24, 26) else face_precision
-                
-                # ====== LOCATION REDIRECT (Node1/Node2 bone structure) ======
-                if prop == "location" and loc_axes_to_export is not None:
-                    if axis not in loc_axes_to_export:
-                        # Questo asse location non appartiene a questo nodo, skip
-                        continue
-                    # Leggi da pose.bones[loc_redirect_source_bone].location
-                    redirect_bone = arm.pose.bones.get(loc_redirect_source_bone)
-                    redirect_action = arm.animation_data.action if (arm.animation_data and arm.animation_data.action) else None
-                    
-                    fcurve = None
-                    if redirect_action:
-                        fcurve = redirect_action.fcurves.find(f'pose.bones["{loc_redirect_source_bone}"].location', index=axis)
-                    
-                    has_keyframes = fcurve and len(fcurve.keyframe_points) > 0
-                    should_export = has_keyframes
-                    track_name = track_names.get(track_id, f"UNKNOWN_{track_id:03X}")
-                    
-                    if should_export:
-                        valid_kf = [kp for kp in fcurve.keyframe_points if frame_start <= kp.co[0] <= frame_end]
-                        if len(valid_kf) > 0:
-                            print(f"  {track_name}: {len(valid_kf)} keys (from {loc_redirect_source_bone}, offset={value_offset_per_axis[axis]:+.4f})")
-                            track_data = self.create_track(track_id, format_type, valid_kf, precision, frame_start, frame_end, value_offset=value_offset_per_axis[axis])
-                            if track_data:
-                                node_tracks.extend(track_data)
-                                track_count += 1
-                                n_type_flags |= track_id
-                    continue
-                # ====== END LOCATION REDIRECT ======
                 
                 # Costruisci il data path
                 if target and hasattr(target, prop):
@@ -429,19 +422,16 @@ class EXPORT_OT_capcom_mot_v2(bpy.types.Operator, ExportHelper):
                             print(f"  {track_name}: DEFAULT")
                             keyframes_to_export = None
                         
-                        # Le location facciali (Node23-26) vengono invertite di
-                        # segno in lettura (mult=-1.0 nell'importer); per il
-                        # round-trip corretto applichiamo lo stesso mult qui.
-                        # Inversione di segno solo su X/Z (axis 0,2) per le
-                        # location facciali; Y (axis 1) mantiene il segno
-                        # originale, coerente con l'importer aggiornato.
-                        # Tutte le location facciali (Node23-26, tutti gli assi)
+                        # Tutte le location facciali (Node23-27, tutti gli assi)
                         # usano segno invertito, coerente con l'importer che
                         # legge con div=-precision (es. -256, -512).
-                        is_facial_location = (23 <= node_idx <= 26) and prop == "location"
+                        is_facial_location = (23 <= node_idx <= 27) and prop == "location"
                         export_mult = -1.0 if is_facial_location else 1.0
                         
-                        track_data = self.create_track(track_id, format_type, keyframes_to_export, precision, frame_start, frame_end, value_mult=export_mult)
+                        # Offset HD: solo Node2.LOC_Y (axis==1) nei modelli HD
+                        export_offset = value_offset_per_axis.get(axis, 0.0) if prop == "location" else 0.0
+                        
+                        track_data = self.create_track(track_id, format_type, keyframes_to_export, precision, frame_start, frame_end, value_offset=export_offset, value_mult=export_mult)
                         if track_data:
                             node_tracks.extend(track_data)
                             track_count += 1
@@ -470,7 +460,7 @@ class EXPORT_OT_capcom_mot_v2(bpy.types.Operator, ExportHelper):
     def calculate_tangents(self, kp, precision, value_mult=1.0):
         """Calcola tangenti c0 (in) e c1 (out) dalle handle di Blender.
         value_mult applica lo stesso segno usato per il valore principale
-        (es. -1.0 per le location facciali Node23-26)."""
+        (es. -1.0 per le location facciali Node23-27)."""
         delta_x_left = kp.co[0] - kp.handle_left[0]
         if delta_x_left != 0:
             delta_y_left = (kp.co[1] - kp.handle_left[1]) * value_mult * precision
@@ -495,12 +485,12 @@ class EXPORT_OT_capcom_mot_v2(bpy.types.Operator, ExportHelper):
     
     def create_track(self, track_id, format_type, keyframes, precision, frame_start, frame_end, value_offset=0.0, value_mult=1.0):
         """Crea un track con formato Hermite 16-bit.
-        value_offset viene aggiunto al valore (in unità Blender) prima della
-        conversione in formato scalato - usato per ripristinare l'offset
-        rimosso dall'importer per Node1/Node2 bone redirect.
-        value_mult moltiplica il valore prima della conversione - usato per
-        invertire il segno delle location facciali (Node23-26), coerente
-        con mult=-1.0 applicato dall'importer in lettura."""
+        value_offset viene aggiunto al valore (in unità Blender) PRIMA del
+        value_mult - usato per ripristinare l'offset visivo di Node2.LOC_Y
+        nei modelli HD.
+        value_mult moltiplica il valore (offset incluso) prima della
+        conversione - usato per invertire il segno delle location facciali
+        (Node23-27), coerente con mult=-1.0/div negativo nell'importer."""
         if keyframes is None:
             num_keys = 2
             t_type = 0x80000000 | (format_type << 16) | track_id

@@ -1,10 +1,10 @@
 bl_info = {
-    "name": "Capcom Outbreak Animation Importer (V1.10)",
+    "name": "Capcom Outbreak Animation Importer (V1.13)",
     "author": "Gemini & User",
-    "version": (1, 10, 0),
+    "version": (1, 13, 0),
     "blender": (3, 0, 0),
     "location": "File > Import > Capcom Outbreak Anim (.mot)",
-    "description": "V1.10: Redirect Node1/Node2 location to Node1 when both are bones",
+    "description": "V1.13: Save loop/loopFrame as custom property on action",
     "category": "Import-Export",
 }
 
@@ -30,41 +30,40 @@ def apply_capcom_logic_v15(filepath, append_mode=False, frame_offset=0, create_n
     
     arm = bpy.data.objects.get("Node2") or bpy.data.objects.get("Node0")
     
-    # ====== NODE1/NODE2 STRUCTURE DETECTION ======
-    # Alcuni modelli hanno Node1 e Node2 come Empty objects separati
-    # (struttura standard, nessuna modifica necessaria).
-    # Altri li hanno come BONES dentro l'armatura: in questo caso Node2
-    # è un osso "speciale" che non muove visivamente il modello per
-    # location, quindi rediremo TUTTI i canali location di Node1 e Node2
-    # (orizzontale + verticale) sul bone Node1, che è il root e applica
-    # correttamente il movimento.
-    redirect_node1_node2_to_node1 = False
-    node2_y_offset = 0.0  # Offset visivo da sottrarre quando scriviamo Node2.LOC_Y su Node1
+    # ====== NODE2 DISCONNECT (HD models) ======
+    # Se Node1 e Node2 sono entrambi bones e Node2 è "connected" al parent,
+    # la sua location risulta bloccata/grigia in Pose Mode. Lo disconnettiamo
+    # automaticamente (non sposta nulla nel rest pose, sblocca solo location).
+    # Node1 e Node2 scrivono ciascuno sulle proprie keyframe (nessun redirect),
+    # ma Node2.LOC_Y viene corretto sottraendo l'head.y di Node2 in rest pose:
+    # senza questa correzione il personaggio "vola" in Blender (Node2 con
+    # use_connect=False mostra la location nello spazio del parent, quindi
+    # un valore come 0.9 verrebbe interpretato come 0.9 unità SOPRA l'head
+    # di Node2, che è già a ~110 unità di altezza).
+    # Il valore originale (f_val, senza offset) resta quello che useremo
+    # in export per scrivere nel file .mot.
+    node2_y_offset = 0.0
     if arm and arm.type == 'ARMATURE':
         node1_is_bone = "Node1" in arm.pose.bones
         node2_is_bone = "Node2" in arm.pose.bones
         if node1_is_bone and node2_is_bone:
-            redirect_node1_node2_to_node1 = True
-            print("STRUCTURE: Node1 and Node2 are BONES")
-            print("  -> Redirecting Node1+Node2 location channels to Node1")
-            
-            # Calcola l'head Y di Node2 in rest pose (Edit Mode).
-            # Questo è l'offset "visivo" introdotto dalla catena di bones:
-            # il valore letto dal file è world-space (origine=0),
-            # ma su Node1 (root) la location si somma all'head di Node1 (0),
-            # mentre il valore "atteso" per Node2 partirebbe da head di Node2.
-            # Sottraiamo questo offset SOLO per la visualizzazione in Blender;
-            # il valore originale (non corretto) va riusato in export.
+            print("STRUCTURE: HD model (Node1 and Node2 are BONES)")
             current_mode = arm.mode
             bpy.context.view_layer.objects.active = arm
             bpy.ops.object.mode_set(mode='EDIT')
             eb2 = arm.data.edit_bones.get("Node2")
+            if eb2 and eb2.use_connect:
+                eb2.use_connect = False
+                print("  -> Disconnected Node2 from parent (was use_connect=True)")
+            elif eb2:
+                print("  -> Node2 already disconnected")
             if eb2:
                 node2_y_offset = eb2.head.y
             bpy.ops.object.mode_set(mode=current_mode)
-            print(f"  -> Visual Y offset correction: -{node2_y_offset:.4f} (Node2 rest-pose head.y)")
+            print("  -> Node1 and Node2 will write their own keyframes normally")
+            print(f"  -> Node2.LOC_Y visual offset: -{node2_y_offset:.4f} (Node2 rest-pose head.y)")
         else:
-            print("STRUCTURE: Node1/Node2 are separate objects (no redirect)")
+            print("STRUCTURE: STANDARD model (Node1/Node2 are separate objects)")
     # ===============================================
     
     ROT_PRECISION = 2607.5945876 
@@ -135,6 +134,8 @@ def apply_capcom_logic_v15(filepath, append_mode=False, frame_offset=0, create_n
             section_num = 0
             hands_section_count = 0  # Contatore per sezioni HANDS
             global_max_frame = 0  # Traccia il frame più alto trovato in tutto il file
+            file_has_loop = False  # Almeno una sezione con loop attivo
+            file_loop_frame = 0    # Loop frame letto dal file (decimale)
 
             while current_section_offset + 20 <= file_size:
                 f.seek(current_section_offset)
@@ -143,6 +144,10 @@ def apply_capcom_logic_v15(filepath, append_mode=False, frame_offset=0, create_n
                 
                 if h_size == 0 or h_size > file_size:
                     break
+                
+                if h_loop == 1:
+                    file_has_loop = True
+                    file_loop_frame = int(h_loopFrame)
                 
                 section_byte = h_count & 0xFF
                 section_name = "UNKNOWN"
@@ -214,15 +219,11 @@ def apply_capcom_logic_v15(filepath, append_mode=False, frame_offset=0, create_n
                         if target:
                             target_type = "SEPARATE OBJECT"
                     
-                    # REDIRECT: se Node1/Node2 sono entrambi bones, i canali
-                    # location di Node1 e Node2 vengono scritti su Node1.
-                    # Le rotazioni/scale restano sul nodo originale.
-                    redirect_location_target = None
-                    redirect_location_name = None
-                    if redirect_node1_node2_to_node1 and node_name in ("Node1", "Node2"):
-                        redirect_location_target = arm.pose.bones.get("Node1")
-                        redirect_location_name = "Node1"
-                    
+                    # REDIRECT: se Node1/Node2 sono entrambi bones, SOLO i canali
+                    # location trovati su Node2 vengono scritti su Node1.
+                    # Node1 NON viene mai redirected (scrive sempre su se stesso),
+                    # altrimenti il suo vero LOC_X/Z (movimento orizzontale)
+                    # verrebbe perso/sovrascritto.
                     print(f"\n  Node{global_node_idx} ({target_type}):")
                     print(f"    n_type: 0x{n_type:08X}")
                     print(f"    Tracks found: {n_sub}")
@@ -255,7 +256,7 @@ def apply_capcom_logic_v15(filepath, append_mode=False, frame_offset=0, create_n
                                 label, prop, idx = track_types[track_type]
                                 track_list.append(f"{label}({t_keys}keys)")
                                 
-                                is_facial = 23 <= global_node_idx <= 26
+                                is_facial = 23 <= global_node_idx <= 27
                                 if is_facial and prop == "location":
                                     # Node23/25 usano FACE_PRECISION, Node24/26 usano FACE_PRECISION_ALT.
                                     # Segno invertito su TUTTI gli assi (X,Y,Z) tramite
@@ -306,25 +307,21 @@ def apply_capcom_logic_v15(filepath, append_mode=False, frame_offset=0, create_n
                                         if adjusted_frame > global_max_frame:
                                             global_max_frame = adjusted_frame
                                         
-                                        # Determina target/nome effettivi per questo keyframe
-                                        # (redirect Node1/Node2 location -> Node1 se attivo)
-                                        if prop == "location" and redirect_location_target is not None:
-                                            write_target = redirect_location_target
-                                            write_node_name = redirect_location_name
-                                        else:
-                                            write_target = target
-                                            write_node_name = node_name
-                                        
-                                        # Valore da scrivere in Blender (può differire dal valore
-                                        # "originale" f_val se applichiamo correzione visiva).
-                                        # f_val resta INVARIATO per coerenza con l'export: la
-                                        # correzione qui sotto è solo per la curva visualizzata
-                                        # in Blender (write_val), non per il dato letto.
+                                        # Ogni nodo scrive sulle proprie keyframe, senza
+                                        # alcun redirect: Node1 prende le keyframe di
+                                        # Node1, Node2 quelle di Node2 (con use_connect
+                                        # disabilitato sopra, Node2 ora si muove
+                                        # visivamente in modo corretto).
+                                        write_target = target
+                                        write_node_name = node_name
                                         write_val = f_val
-                                        if (prop == "location" and idx == 1 
-                                                and node_name == "Node2" 
-                                                and redirect_location_target is not None):
-                                            # Sottrai l'offset visivo (head Y di Node2 in rest pose)
+                                        
+                                        # Correzione visiva: solo Node2.LOC_Y (idx==1),
+                                        # solo nei modelli HD. f_val resta il valore
+                                        # originale del file (usato per l'export);
+                                        # write_val è solo per la visualizzazione corretta
+                                        # in Blender.
+                                        if prop == "location" and idx == 1 and node_name == "Node2" and node2_y_offset != 0.0:
                                             write_val = f_val - node2_y_offset
                                         
                                         if prop == "location": 
@@ -418,6 +415,15 @@ def apply_capcom_logic_v15(filepath, append_mode=False, frame_offset=0, create_n
         bpy.context.scene.frame_current = 0
         print(f"\nScene frame range set: 0 -> {int(global_max_frame)}")
         
+        # Salva loop/loopFrame come custom property sull'action, così
+        # l'exporter può recuperarli automaticamente senza doverli
+        # reinserire manualmente ogni volta.
+        if arm and arm.animation_data and arm.animation_data.action:
+            action = arm.animation_data.action
+            action["capcom_loop"] = file_has_loop
+            action["capcom_loop_frame"] = file_loop_frame
+            print(f"Saved loop info on action '{action.name}': loop={file_has_loop}, loop_frame={file_loop_frame}")
+        
         print(f"\n{'='*60}")
         print("IMPORT COMPLETED")
         print(f"{'='*60}\n")
@@ -431,7 +437,7 @@ def apply_capcom_logic_v15(filepath, append_mode=False, frame_offset=0, create_n
 
 class IMPORT_OT_capcom_outbreak_v15(bpy.types.Operator, ImportHelper):
     bl_idname = "import_anim.capcom_outbreak_v15"
-    bl_label = "Import Outbreak v1.10"
+    bl_label = "Import Outbreak v1.13"
     filename_ext = ".mot"
     
     create_new_action: BoolProperty(
