@@ -59,7 +59,6 @@ def extract_mot_final(filepath):
     for i, entry in enumerate(animation_table):
         combined_mot = bytearray()
         sections_in_anim = 0
-        first_offset = None  # offset del primo blocco valido trovato nell'entry
         
         for ptr in entry:
             if ptr == 0xFFFFFFFF or ptr == 0 or ptr >= len(data):
@@ -69,19 +68,16 @@ def extract_mot_final(filepath):
                 if data[ptr:ptr+2] == b'\x02\x00':
                     size = struct.unpack("<I", data[ptr+8:ptr+12])[0]
                     if size > 0 and (ptr + size) <= len(data):
-                        if first_offset is None:
-                            first_offset = ptr
                         combined_mot.extend(data[ptr : ptr + size])
                         sections_in_anim += 1
             except:
                 continue
 
-        # 4. Save file: counter + first block offset (8 hex digits, zero-padded)
+        # 4. Save file using sequential counter starting from 000
         if combined_mot:
-            offset_str = f"{first_offset:08X}" if first_offset is not None else "00000000"
-            out_name = f"{file_basename}_{extracted_count:03d}_{offset_str}.mot"
+            out_name = f"{file_basename}_{extracted_count:03d}.mot"
             
-            print(f"Exporting {out_name} | Table Row {i+1:03d} | Sections: {sections_in_anim} | First offset: 0x{offset_str}")
+            print(f"Exporting {out_name} | Table Row {i+1:03d} | Sections: {sections_in_anim}")
             
             with open(os.path.join(output_folder, out_name), "wb") as f:
                 f.write(combined_mot)
