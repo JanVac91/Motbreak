@@ -75,6 +75,20 @@ def apply_capcom_logic_v15(filepath, append_mode=False, frame_offset=0, create_n
     bpy.context.scene.render.fps = 60
     bpy.context.scene.render.fps_base = 1.0
 
+     # Pulisci animazione precedente e resetta la pose
+    if arm.animation_data:
+        arm.animation_data_clear()
+ 
+    # Clear User Transforms su tutti i bone (equivalente di Alt+R, Alt+G, Alt+S)
+    prev_active = bpy.context.view_layer.objects.active
+    prev_mode   = arm.mode
+    bpy.context.view_layer.objects.active = arm
+    bpy.ops.object.mode_set(mode='POSE')
+    bpy.ops.pose.select_all(action='SELECT')
+    bpy.ops.pose.transforms_clear()
+    bpy.ops.object.mode_set(mode=prev_mode)
+    bpy.context.view_layer.objects.active = prev_active
+    
     if arm:
         # Se create_new_action, crea una nuova action
         if create_new_action:

@@ -67,9 +67,23 @@ def _load_mot(filepath, arm):
     if not arm or arm.type != 'ARMATURE':
         return False, 0
 
-    # Pulisci animazione precedente
+    bpy.context.scene.render.fps = 60
+    bpy.context.scene.render.fps_base = 1.0
+
+    # Pulisci animazione precedente e resetta la pose
     if arm.animation_data:
         arm.animation_data_clear()
+
+    # Clear User Transforms su tutti i bone (equivalente di Alt+R, Alt+G, Alt+S)
+    prev_active = bpy.context.view_layer.objects.active
+    prev_mode   = arm.mode
+    bpy.context.view_layer.objects.active = arm
+    bpy.ops.object.mode_set(mode='POSE')
+    bpy.ops.pose.select_all(action='SELECT')
+    bpy.ops.pose.transforms_clear()
+    bpy.ops.object.mode_set(mode=prev_mode)
+    bpy.context.view_layer.objects.active = prev_active
+
     for bone in arm.pose.bones:
         bone.rotation_mode = 'XYZ'
 
@@ -247,6 +261,12 @@ class MOTViewerProps(PropertyGroup):
         description="Start playback automatically after loading",
         default=True,
     )
+    jump_index: IntProperty(
+        name="Go to",
+        description="Jump to this animation number (1-based)",
+        default=1,
+        min=1,
+    )
 
     def get_files(self):
         folder = bpy.path.abspath(self.folder)
@@ -275,7 +295,6 @@ def _get_arm():
 
 
 def _load_and_play(context, filepath):
-
     arm = _get_arm()
     if not arm:
         return False, "No armature found in scene"
@@ -356,6 +375,31 @@ class MOT_OT_Prev(Operator):
         return {'FINISHED'}
 
 
+class MOT_OT_Jump(Operator):
+    bl_idname  = "mot_viewer.jump"
+    bl_label   = "Go"
+    bl_description = "Jump to the specified animation number"
+
+    def execute(self, context):
+        props = context.scene.mot_viewer
+        files = props.get_files()
+        if not files:
+            self.report({'WARNING'}, "No .mot files loaded")
+            return {'CANCELLED'}
+        # Clamp al range valido (1-based -> 0-based)
+        target = max(1, min(props.jump_index, len(files)))
+        props.jump_index    = target
+        props.current_index = target - 1
+        folder   = bpy.path.abspath(props.folder)
+        filepath = os.path.join(folder, files[props.current_index])
+        ok, err  = _load_and_play(context, filepath)
+        if not ok:
+            self.report({'ERROR'}, err)
+            return {'CANCELLED'}
+        self.report({'INFO'}, f"[{target}/{len(files)}] {files[props.current_index]}")
+        return {'FINISHED'}
+
+
 class MOT_OT_StopPlay(Operator):
     bl_idname  = "mot_viewer.stop"
     bl_label   = "Stop"
@@ -406,6 +450,13 @@ class VIEW3D_PT_MOTViewer(Panel):
 
         layout.separator()
 
+        # Jump to number
+        row_jump = layout.row(align=True)
+        row_jump.prop(props, "jump_index", text="#")
+        row_jump.operator("mot_viewer.jump", text="Go", icon='FORWARD')
+
+        layout.separator()
+
         # Prev / Next
         row = layout.row(align=True)
         row.scale_y = 1.4
@@ -431,6 +482,7 @@ classes = [
     MOT_OT_LoadFolder,
     MOT_OT_Next,
     MOT_OT_Prev,
+    MOT_OT_Jump,
     MOT_OT_StopPlay,
     VIEW3D_PT_MOTViewer,
 ]
@@ -440,8 +492,6 @@ def register():
     for cls in classes:
         bpy.utils.register_class(cls)
     bpy.types.Scene.mot_viewer = bpy.props.PointerProperty(type=MOTViewerProps)
-    bpy.context.scene.render.fps = 60
-
 
 
 def unregister():
