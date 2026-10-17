@@ -1,0 +1,14 @@
+Movimento verticale: Node2
+Movimento Orizzontale: Node1
+Bacino (che muove bacino e gambe): Node3
+GambaSx: Node4 GinoccchioSX Node5 PiedeSX Node6
+GambaDX: Node7 GinocchioDX Node8 PiedeDX Node9
+Busto inferiore: Node10
+Busto superiore: Node11
+Spalla Sinistra: Node 12 Braccio Sinistra: Node 13 Avambraccio Sinistro: Node14, Polso SX: Node 15
+Spalla Destra: Node 16 Braccio dx Node17 Avambraccio dx: Node18, PolsoDX node19
+Collo: Node20
+Testa: Node21
+Eyebrow SX: Node 23, Eyelid SX node 24
+Eyebrow DX: Node25, EyelidDX: Node26
+Jaw: Node27
