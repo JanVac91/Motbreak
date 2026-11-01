@@ -12,3 +12,8 @@ Testa: Node21
 Eyebrow SX: Node 23, Eyelid SX node 24
 Eyebrow DX: Node25, EyelidDX: Node26
 Jaw: Node27
+
+
+1. **Root Motion (walking/running):**
+   - Put  vertical movement on **Node2** (Y location)
+	- put horizontal movement on Node1

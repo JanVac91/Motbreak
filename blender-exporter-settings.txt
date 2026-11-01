@@ -1,0 +1,21 @@
+	solo oggetti selezionati (l’armatura e le mesh Mesh0, Mesh1…)	niente luci, camere o oggetti temporanei
+Tipi di oggetto	Armatura + Mesh	
+Scala	1.0,
+“Apply Unit Scale” attivo, 
+“Apply Scalings” = FBX Units Scale… cioè FBX_SCALE_NONE	nel file finisce UnitScaleFactor = 1 (centimetri) e le coordinate sono già in cm Outbreak
+Assi	
+Forward −Z, Up Y	
+i dati sono già in coordinate Outbreak, quindi gli assi non vengono girati
+
+Add Leaf Bones	no	niente ossa “_end” in più: lo scheletro resta Node0…Node35
+
+Primary / Secondary Bone Axis	Y / X	
+Only Deform Bones	no	
+Animazione (Bake Animation)	no	
+Smoothing	
+Normals Only (OFF)	le normali sono già quelle copiate dal modello originale
+Apply Modifiers	no	l’armatura resta come skin
+Path Mode     Copy, con Embed Textures	le texture sono dentro l’FBX
+Custom Properties	
+sì	serve per il GroupId su ogni osso: senza, OBTool scrive “Did not find group id” e anima tutto come le gambe
+Formato	FBX binario 7.4	

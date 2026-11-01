@@ -1,0 +1,61 @@
+// daz2ob_nomi.dsa - per DAZ Studio
+// -----------------------------------------------------------------------------------------------
+// Il pannello Scene di DAZ mostra (e rinomina) l'ETICHETTA dei capi, ma l'FBX usa il NOME interno.
+// Questo script mette nel nome interno l'etichetta dei capi con il prefisso dell'outfit, cosi'
+// daz2ob trova gli outfit gia' pronti quando premi "Analizza".
+//
+// Come si usa:
+//   1. nel pannello Scene rinomina i capi con il nome dell'outfit davanti e due trattini bassi:
+//        casual__TiedShirt      casual__Shorts      casual+sera__Sandals   (un capo in due outfit)
+//        sera__Mini             sera__Pumps
+//   2. Window > Panes (Tabs) > Script IDE, "Open..." su questo file, poi "Execute"
+//      (oppure File > Open... su questo file). Lavora sempre su tutta la scena.
+//   3. esporta l'FBX come sempre.
+//
+// Prefisso sbagliato? Rinomina di nuovo l'etichetta e rilancia lo script.
+// Vuoi togliere il prefisso? Togli "outfit__" dall'etichetta e rilancia: anche il nome torna senza.
+// -----------------------------------------------------------------------------------------------
+(function () {
+    var nodes = Scene.getNodeList();
+    var renamed = [], fixed = [], ok = [];
+    for (var i = 0; i < nodes.length; i++) {
+        var node = nodes[i];
+        var label = node.getLabel();
+        var name = node.getName();
+        var labelHas = label.indexOf("__") > 0;
+        var nameHas = name.indexOf("__") > 0;
+        if (labelHas) {
+            if (name != label) {
+                node.setName(label);
+                renamed.push(label);
+            } else {
+                ok.push(label);
+            }
+        } else if (nameHas) {
+            // prefisso tolto dall'etichetta: lo tolgo anche dal nome
+            node.setName(label);
+            fixed.push(label + "  (era " + name + ")");
+        }
+    }
+    function block(title, list) {
+        if (list.length == 0) {
+            return "";
+        }
+        var t = "\n\n" + title + " (" + list.length + "):";
+        for (var k = 0; k < list.length && k < 30; k++) {
+            t += "\n  " + list[k];
+        }
+        if (list.length > 30) {
+            t += "\n  ...";
+        }
+        return t;
+    }
+    if (renamed.length + fixed.length + ok.length == 0) {
+        MessageBox.information("Nessun capo con il nome dell'outfit.\n\nNel pannello Scene i capi devono " +
+            "chiamarsi outfit__capo (es. casual__TiedShirt).", "daz2ob", "&OK");
+        return;
+    }
+    MessageBox.information("Capi con il nome dell'outfit: " + (renamed.length + ok.length) +
+        block("Rinominati adesso", renamed) + block("Gia' a posto", ok) +
+        block("Prefisso tolto", fixed) + "\n\nOra esporta l'FBX.", "daz2ob", "&OK");
+})();

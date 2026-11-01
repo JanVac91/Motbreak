@@ -1,0 +1,279 @@
+HIERARCHY
+ROOT Node1
+{
+	OFFSET 0.000000 0.000000 0.000000
+	CHANNELS 6 Xposition Yposition Zposition Xrotation Yrotation Zrotation
+	JOINT Node2
+	{
+		OFFSET 0.000000 110.000000 0.000000
+		CHANNELS 3 Xrotation Yrotation Zrotation
+		JOINT Node10
+		{
+			OFFSET 0.000000 1.000000 0.000005
+			CHANNELS 6 Xposition Yposition Zposition Xrotation Yrotation Zrotation
+			JOINT Node11
+			{
+				OFFSET 0.000000 12.957764 -0.078986
+				CHANNELS 6 Xposition Yposition Zposition Xrotation Yrotation Zrotation
+				JOINT Node12
+				{
+					OFFSET 7.321028 19.796494 -1.175610
+					CHANNELS 6 Xposition Yposition Zposition Xrotation Yrotation Zrotation
+					JOINT Node13
+					{
+						OFFSET 8.175796 0.000000 0.000000
+						CHANNELS 6 Xposition Yposition Zposition Xrotation Yrotation Zrotation
+						JOINT Node14
+						{
+							OFFSET 24.775383 0.000000 -1.081859
+							CHANNELS 6 Xposition Yposition Zposition Xrotation Yrotation Zrotation
+							JOINT Node15
+							{
+								OFFSET 25.369999 0.000000 0.800878
+								CHANNELS 6 Xposition Yposition Zposition Xrotation Yrotation Zrotation
+								JOINT Node32
+								{
+									OFFSET 1.001076 0.000153 0.000000
+									CHANNELS 6 Xposition Yposition Zposition Xrotation Yrotation Zrotation
+									JOINT Node33
+									{
+										OFFSET 3.300003 -1.199997 3.000000
+										CHANNELS 6 Xposition Yposition Zposition Xrotation Yrotation Zrotation
+										End Site
+										{
+											OFFSET 0.000000 7.580338 0.000000
+										}
+									}
+									JOINT Node34
+									{
+										OFFSET 8.900002 1.500000 2.467463
+										CHANNELS 6 Xposition Yposition Zposition Xrotation Yrotation Zrotation
+										End Site
+										{
+											OFFSET 0.000000 7.580338 0.000000
+										}
+									}
+									JOINT Node35
+									{
+										OFFSET 8.599998 1.199997 -1.200001
+										CHANNELS 6 Xposition Yposition Zposition Xrotation Yrotation Zrotation
+										End Site
+										{
+											OFFSET 0.000000 7.580338 0.000000
+										}
+									}
+								}
+							}
+						}
+					}
+				}
+				JOINT Node16
+				{
+					OFFSET -7.321028 19.796646 -1.175610
+					CHANNELS 6 Xposition Yposition Zposition Xrotation Yrotation Zrotation
+					JOINT Node17
+					{
+						OFFSET -8.175796 0.000000 0.000000
+						CHANNELS 6 Xposition Yposition Zposition Xrotation Yrotation Zrotation
+						JOINT Node18
+						{
+							OFFSET -24.775356 0.000000 -1.081858
+							CHANNELS 6 Xposition Yposition Zposition Xrotation Yrotation Zrotation
+							JOINT Node19
+							{
+								OFFSET -25.370003 0.000000 0.800876
+								CHANNELS 6 Xposition Yposition Zposition Xrotation Yrotation Zrotation
+								JOINT Node28
+								{
+									OFFSET -1.001106 0.000000 -0.000422
+									CHANNELS 6 Xposition Yposition Zposition Xrotation Yrotation Zrotation
+									JOINT Node29
+									{
+										OFFSET -3.300003 -1.199997 3.000000
+										CHANNELS 6 Xposition Yposition Zposition Xrotation Yrotation Zrotation
+										End Site
+										{
+											OFFSET 0.000000 7.580338 0.000000
+										}
+									}
+									JOINT Node30
+									{
+										OFFSET -8.900002 1.500000 2.467463
+										CHANNELS 6 Xposition Yposition Zposition Xrotation Yrotation Zrotation
+										End Site
+										{
+											OFFSET 0.000000 7.580338 0.000000
+										}
+									}
+									JOINT Node31
+									{
+										OFFSET -8.599998 1.199997 -1.200001
+										CHANNELS 6 Xposition Yposition Zposition Xrotation Yrotation Zrotation
+										End Site
+										{
+											OFFSET 0.000000 7.580338 0.000000
+										}
+									}
+								}
+							}
+						}
+					}
+				}
+				JOINT Node20
+				{
+					OFFSET 0.000000 23.690445 -0.968898
+					CHANNELS 6 Xposition Yposition Zposition Xrotation Yrotation Zrotation
+					JOINT Node21
+					{
+						OFFSET 0.000000 7.429230 0.000000
+						CHANNELS 3 Xrotation Yrotation Zrotation
+						JOINT Node36
+						{
+							OFFSET 0.000000 14.069824 -9.594594
+							CHANNELS 6 Xposition Yposition Zposition Xrotation Yrotation Zrotation
+							JOINT Node37
+							{
+								OFFSET 0.000000 -12.687866 0.119870
+								CHANNELS 6 Xposition Yposition Zposition Xrotation Yrotation Zrotation
+								End Site
+								{
+									OFFSET 0.000000 12.688431 0.000001
+								}
+							}
+						}
+						JOINT Node22
+						{
+							OFFSET 0.000000 0.000183 0.000000
+							CHANNELS 6 Xposition Yposition Zposition Xrotation Yrotation Zrotation
+							JOINT Node23
+							{
+								OFFSET 3.000000 7.446762 8.000000
+								CHANNELS 6 Xposition Yposition Zposition Xrotation Yrotation Zrotation
+								End Site
+								{
+									OFFSET 0.000000 9.366089 0.000000
+								}
+							}
+							JOINT Node24
+							{
+								OFFSET 3.054706 6.600006 7.983146
+								CHANNELS 6 Xposition Yposition Zposition Xrotation Yrotation Zrotation
+								End Site
+								{
+									OFFSET 0.000000 9.366074 0.000000
+								}
+							}
+							JOINT Node25
+							{
+								OFFSET -3.000000 7.446762 8.000000
+								CHANNELS 6 Xposition Yposition Zposition Xrotation Yrotation Zrotation
+								End Site
+								{
+									OFFSET 0.000000 9.366089 0.000000
+								}
+							}
+							JOINT Node26
+							{
+								OFFSET -3.000000 6.600006 8.000000
+								CHANNELS 6 Xposition Yposition Zposition Xrotation Yrotation Zrotation
+								End Site
+								{
+									OFFSET 0.000000 9.366074 0.000000
+								}
+							}
+							JOINT Node27
+							{
+								OFFSET 0.000000 2.459518 0.736459
+								CHANNELS 6 Xposition Yposition Zposition Xrotation Yrotation Zrotation
+								End Site
+								{
+									OFFSET 0.000000 9.366089 0.000000
+								}
+							}
+						}
+					}
+				}
+			}
+		}
+		JOINT Node3
+		{
+			OFFSET 0.000000 0.000000 0.000005
+			CHANNELS 6 Xposition Yposition Zposition Xrotation Yrotation Zrotation
+			JOINT Node4
+			{
+				OFFSET 7.813896 -16.000000 0.000002
+				CHANNELS 6 Xposition Yposition Zposition Xrotation Yrotation Zrotation
+				JOINT Node5
+				{
+					OFFSET 0.000000 -41.087288 0.999998
+					CHANNELS 6 Xposition Yposition Zposition Xrotation Yrotation Zrotation
+					JOINT Node6
+					{
+						OFFSET 0.000000 -39.884830 -2.000002
+						CHANNELS 6 Xposition Yposition Zposition Xrotation Yrotation Zrotation
+						End Site
+						{
+							OFFSET 0.000000 39.934944 0.000002
+						}
+					}
+				}
+			}
+			JOINT Node7
+			{
+				OFFSET -7.813896 -16.000000 -0.000001
+				CHANNELS 6 Xposition Yposition Zposition Xrotation Yrotation Zrotation
+				JOINT Node8
+				{
+					OFFSET 0.000000 -41.087257 0.999998
+					CHANNELS 6 Xposition Yposition Zposition Xrotation Yrotation Zrotation
+					JOINT Node9
+					{
+						OFFSET 0.000000 -39.884861 -2.000002
+						CHANNELS 6 Xposition Yposition Zposition Xrotation Yrotation Zrotation
+						End Site
+						{
+							OFFSET 0.000000 39.934975 0.000002
+						}
+					}
+				}
+			}
+			JOINT Node38
+			{
+				OFFSET 0.000000 0.000000 0.000000
+				CHANNELS 6 Xposition Yposition Zposition Xrotation Yrotation Zrotation
+				JOINT Node39
+				{
+					OFFSET 3.418000 -26.622330 10.424765
+					CHANNELS 6 Xposition Yposition Zposition Xrotation Yrotation Zrotation
+					JOINT Node40
+					{
+						OFFSET 0.000000 -20.825672 -0.839012
+						CHANNELS 6 Xposition Yposition Zposition Xrotation Yrotation Zrotation
+						End Site
+						{
+							OFFSET 0.000000 20.842564 0.000001
+						}
+					}
+				}
+				JOINT Node41
+				{
+					OFFSET -3.418260 -26.622330 10.424765
+					CHANNELS 6 Xposition Yposition Zposition Xrotation Yrotation Zrotation
+					JOINT Node42
+					{
+						OFFSET 0.000000 -20.825672 -0.839001
+						CHANNELS 6 Xposition Yposition Zposition Xrotation Yrotation Zrotation
+						End Site
+						{
+							OFFSET 0.000000 20.842564 0.000001
+						}
+					}
+				}
+			}
+		}
+	}
+}
+MOTION
+Frames: 1
+Frame Time: 0.033333
+0.000000 0.000000 0.000000 -0.000000 0.000000 -0.000000 -0.000000 0.000000 -0.000000 0.000000 1.000000 -0.000000 -0.000003 0.000000 -0.000000 0.000000 12.957764 -0.078986 -0.000000 0.000000 -0.000000 7.321028 19.796494 -1.175610 -0.000000 0.000000 -0.000000 8.175796 0.000000 0.000000 -0.000000 0.000000 -0.000000 24.775383 0.000000 -1.081859 -0.000000 0.000000 -0.000000 25.369999 0.000000 0.800877 -0.000000 0.000000 -0.000000 1.001076 0.000153 -0.000000 0.000000 0.000000 -0.000000 3.300003 -1.199997 3.000000 -0.000000 0.000000 -0.000000 8.900002 1.500000 2.467463 -0.000000 0.000000 -0.000000 8.599998 1.199997 -1.200001 -0.000000 0.000000 -0.000000 -7.321028 19.796646 -1.175610 -0.000000 0.000000 -0.000000 -8.175796 0.000000 0.000000 -0.000000 0.000000 -0.000000 -24.775356 0.000000 -1.081858 -0.000000 0.000000 -0.000000 -25.370003 0.000000 0.800876 -0.000000 0.000000 -0.000000 -1.001106 0.000000 -0.000422 -0.000000 0.000000 -0.000000 -3.300002 -1.200004 3.000000 -0.000000 -0.000000 0.000006 -8.899999 1.499993 2.467463 0.000005 -0.000005 0.000005 -8.599999 1.199992 -1.200001 -0.000000 -0.000000 0.000003 0.000000 23.690445 -0.968898 -0.000000 0.000000 -0.000000 -0.000000 0.000000 -0.000000 0.000000 14.069824 -9.594595 -0.000000 0.000000 -0.000000 0.000000 -12.687866 0.119871 -0.000000 0.000000 -0.000000 0.000000 0.000183 0.000000 -0.000000 0.000000 -0.000000 3.000000 7.446762 8.000000 -0.000000 0.000000 -0.000000 3.054706 6.600006 7.983146 -0.000000 0.000000 -0.000000 -3.000000 7.446762 8.000000 -0.000000 0.000000 -0.000000 -3.000000 6.600007 8.000000 -0.000002 0.000000 -0.000000 0.000000 2.459518 0.736459 -0.000006 0.000000 -0.000000 0.000000 0.000000 -0.000000 -0.000003 0.000000 -0.000000 7.813896 -16.000000 0.000002 -0.000000 0.000000 -0.000000 0.000000 -41.087288 0.999998 -0.000000 0.000000 -0.000000 0.000000 -39.884830 -2.000002 -0.000000 0.000000 -0.000000 -7.813896 -16.000000 -0.000001 -0.000000 0.000000 -0.000000 0.000000 -41.087257 0.999998 -0.000000 0.000000 -0.000000 0.000000 -39.884861 -2.000002 -0.000000 0.000000 -0.000000 0.000000 0.000000 0.000000 -0.000000 0.000000 -0.000000 3.418000 -26.622330 10.424765 -0.000000 0.000000 -0.000000 0.000000 -20.825672 -0.839012 -0.000000 0.000000 -0.000000 -3.418260 -26.622330 10.424765 -0.000000 0.000000 -0.000000 0.000000 -20.825672 -0.839001 -0.000000 0.000000 -0.000000 

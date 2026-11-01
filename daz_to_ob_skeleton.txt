@@ -1,0 +1,36 @@
+Pelvis = Node3
+LThighBend = Node4
+LShin = Node5
+LFoot = Node6 ---> figli tutti legati a Node6
+RThighBend = Node7
+RShin = Node8
+RFoot = Node9 ---> figli tutti legati a Node9
+AbdomenLower = Node10
+AbdomenUpper = Node11
+ChestLower = Node11
+ChestUpper =Node11
+LCollar= Node12
+LShldrBend = Node13
+LshldrTwist - ignora
+LForeArmBend = Node14
+LForearmTwist = ignora
+lHand = Node15 ----> figli, puoi legarli alle ossa delle dita se riesci, senno tutti in 15. 
+RCollar= Node16
+RShldrBend = Node17
+RshldrTwist - ignora
+RForeArmBend = Node18
+RForearmTwist = ignora
+RHand = Node19 ----> figli, puoi legarli alle ossa delle dita se riesci, senno in 19. 
+NeckLower = Node20
+NeckUpper = Node21
+Head = Node21 o Node22?----> tutto quello che trovi qui sotto, mettilo con 21 o 22 (non so a cosa serva il node 22)
+lowerJaw = Node27 
+upperfaceRig = metti tutto in Node21 o Node22
+lBrowMid -- Node23
+lEyelidUpper - Node 24
+lEyelidUpperInner - Node24
+lEyelidUpperOuter - Node24
+rBowMid -- Node25
+rEyelidUpper - Node 26
+rEyelidUpperInner - Node26
+rEyelidUpperOuter - Node26

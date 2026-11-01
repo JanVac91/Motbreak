@@ -1,7 +1,7 @@
 bl_info = {
     "name": "PS2 BIN Animation Studio",
     "author": "CarlVercetti & Claude",
-    "version": (2, 6, 0),
+    "version": (3, 1, 0),
     "blender": (3, 0, 0),
     "location": "View3D > Sidebar > BIN Studio",
     "description": "Parse .bin (header + offset table + .mot blocks), preview animations on armature and save edited keyframe values back into the .bin",
@@ -10,6 +10,7 @@ bl_info = {
 
 import bpy
 import os
+import shutil
 import struct
 from bpy.props import StringProperty, IntProperty, BoolProperty, CollectionProperty, PointerProperty, EnumProperty
 from bpy.types import Panel, Operator, PropertyGroup, UIList
@@ -20,6 +21,43 @@ from bpy_extras.io_utils import ExportHelper, ImportHelper
 # Stessa logica di Mots_Extractor_Motbreak.py, adattata per restare
 # in memoria invece di scrivere file separati su disco.
 # ============================================================
+
+BLOCK_TYPES = (0x80000001, 0x80000002)   # 02 = chiavi int16 (0x11/0x12), 01 = chiavi float (0x22)
+
+
+def _block_type(b):
+    return struct.unpack_from("<I", b, 0)[0]
+
+
+def _section_ids(data, desc_start):
+    """
+    File sp (40 sezioni) / plNN (20 sezioni): tabella delle sezioni (dimensione in parole, offset)
+    a partire da 0x8; ogni sezione = record da 20 byte. ID = 100 * (sezione mod 20) + indice record.
+    Ritorna {riga_tabella: (id, banco, sezione, indice)} oppure {} se il file non e' di questo tipo.
+    La riga e' il numero progressivo del record dall'inizio della tabella (desc_start).
+    """
+    if len(data) < 16:
+        return {}
+    first = struct.unpack_from("<I", data, 12)[0]
+    if first != desc_start or first < 16 or first > len(data) or (first - 8) % 8:
+        return {}
+    n = (first - 8) // 8
+    if n not in (20, 40):
+        return {}
+    secs = [struct.unpack_from("<2I", data, 8 + 8 * k) for k in range(n)]
+    pos = first
+    for size_w, off in secs:                      # sezioni contigue a partire dalla tabella
+        if off != pos or size_w * 4 % 20 or off + size_w * 4 > len(data):
+            return {}
+        pos += size_w * 4
+    out, row = {}, 0
+    for k, (size_w, _off) in enumerate(secs):
+        bank = ("A" if k < 20 else "B") if n == 40 else "P"
+        for j in range(size_w * 4 // 20):
+            out[row] = (100 * (k % 20) + j, bank, k, j)
+            row += 1
+    return out
+
 
 def read_bin_entries(path):
     """
@@ -76,6 +114,8 @@ def read_bin_entries(path):
     if not animation_table:
         return None
 
+    ids_by_row = _section_ids(data, desc_start)
+
     # --- Estrazione: per ogni riga, concatena i blocchi validi ---
     entries = []
     for i, entry in enumerate(animation_table):
@@ -87,7 +127,7 @@ def read_bin_entries(path):
             if ptr == 0xFFFFFFFF or ptr == 0 or ptr >= len(data):
                 continue
             try:
-                if data[ptr:ptr+2] == b'\x02\x00':
+                if ptr + 12 <= len(data) and struct.unpack_from("<I", data, ptr)[0] in BLOCK_TYPES:
                     size = struct.unpack_from("<I", data, ptr + 8)[0]
                     if size > 0 and (ptr + size) <= len(data):
                         combined.extend(data[ptr: ptr + size])
@@ -107,6 +147,11 @@ def read_bin_entries(path):
                 "block_slots":   block_slots,   # slot della tabella: 0 lower, 1 upper, 2 face, 3-4 hand
                 "anim_no":       len(entries),
             })
+            info = ids_by_row.get(i)
+            if info:
+                entries[-1].update(anim_id=info[0], bank=info[1], section=info[2], record=info[3])
+            else:
+                entries[-1].update(anim_id=None, bank=None, section=None, record=None)
 
     if not entries:
         return None
@@ -138,6 +183,7 @@ TRACK_TYPES = {
 
 SECTION_NODE_START = {
     0x0A: 0,
+    0x0B: 10,   # UPPER con 11 nodi: Node10 -> Node20
     0x0C: 10,
     0x0D: 10,   # UPPER + 1 nodo extra: 13 nodi consecutivi, Node10 -> Node22
     0x06: 22,
@@ -198,7 +244,7 @@ def apply_mot_bytes(data, arm):
 
     while pos + 20 <= file_size:
         h_type, h_count, h_size, h_loop, h_loopFrame = struct.unpack_from("<IIIIf", data, pos)
-        if h_type != 0x80000002 or h_size == 0 or pos + h_size > file_size:
+        if h_type not in BLOCK_TYPES or h_size == 0 or pos + h_size > file_size:
             break
 
         if h_loop == 1:
@@ -308,8 +354,9 @@ def apply_mot_bytes(data, arm):
                                             if abs(kfp.co[0] - frame) < 0.01:
                                                 kfp.handle_left_type  = 'FREE'
                                                 kfp.handle_right_type = 'FREE'
-                                                dy_l = (c0 * 1.0) / div
-                                                dy_r = (c1 * 1.0) / div
+                                                tdiv = 1.0 if fmt == 0x22 else div   # float: tangenti in unita' reali
+                                                dy_l = (c0 * 1.0) / tdiv
+                                                dy_r = (c1 * 1.0) / tdiv
                                                 kfp.handle_left[0]  = kfp.co[0] - 1.0
                                                 kfp.handle_left[1]  = kfp.co[1] - dy_l
                                                 kfp.handle_right[0] = kfp.co[0] + 1.0
@@ -357,7 +404,7 @@ SLOT_SPECS = {
     1: ("upper", 0x0C, range(10, 22)),
     2: ("face",  0x06, range(22, 28)),
 }
-KNOWN_SECTION_BYTES = (0x0A, 0x0C, 0x0D, 0x06, 0x04)
+KNOWN_SECTION_BYTES = (0x0A, 0x0B, 0x0C, 0x0D, 0x06, 0x04)
 EMPTY_NODE = struct.pack("<III", 0x80000000, 0, 12)
 
 
@@ -384,6 +431,8 @@ class _RebuildCtx:
 
     def __init__(self, arm):
         self.arm = arm
+        self.block_type = 0x80000002            # tipo dei blocchi dell'animazione (01 = float)
+        self.new_fmt = NEW_TRACK_FMT            # formato delle tracce create da zero
         self.action = arm.animation_data.action if (arm and arm.animation_data) else None
         self.is_hd = "Node1" in arm.pose.bones and "Node2" in arm.pose.bones
         self.node2_y_offset = 0.0
@@ -438,13 +487,14 @@ def _is_default_constant(prop, keys):
 
 def _encode_keys(ctx, fmt, keys, node_name, prop, idx, div):
     out = bytearray()
+    tdiv = 1.0 if fmt == 0x22 else div           # float: tangenti in unita' reali per frame
     for frame, kp in keys:
         value = ctx.file_value(node_name, prop, idx, kp)
 
         dxl = kp.co[0] - kp.handle_left[0]
-        c0 = ((kp.co[1] - kp.handle_left[1]) * div / dxl) if dxl != 0 else 0.0
+        c0 = ((kp.co[1] - kp.handle_left[1]) * tdiv / dxl) if dxl != 0 else 0.0
         dxr = kp.handle_right[0] - kp.co[0]
-        c1 = ((kp.handle_right[1] - kp.co[1]) * div / dxr) if dxr != 0 else 0.0
+        c1 = ((kp.handle_right[1] - kp.co[1]) * tdiv / dxr) if dxr != 0 else 0.0
 
         if fmt == 0x22:
             out += struct.pack("<ffff", value, float(frame), c0, c1)
@@ -518,8 +568,8 @@ def _rebuild_node(ctx, data, node_pos, node_end, n_type, n_sub, node_idx):
         if _is_default_constant(prop, keys):
             ctx.tracks_const_skipped += 1
             continue
-        kb = _encode_keys(ctx, NEW_TRACK_FMT, keys, node_name, prop, idx, _div_for(node_idx, prop))
-        t_type = 0x80000000 | (NEW_TRACK_FMT << 16) | t_id
+        kb = _encode_keys(ctx, ctx.new_fmt, keys, node_name, prop, idx, _div_for(node_idx, prop))
+        t_type = 0x80000000 | (ctx.new_fmt << 16) | t_id
         pos = len(final)
         for i, (eid, _b) in enumerate(final):
             if eid > t_id:
@@ -549,7 +599,7 @@ def rebuild_mot_sections(data, ctx):
 
     while pos + 20 <= size:
         h_type, h_count, h_size, _l, _lf = struct.unpack_from("<IIIIf", data, pos)
-        if h_type != 0x80000002 or h_size == 0 or pos + h_size > size:
+        if h_type not in BLOCK_TYPES or h_size == 0 or pos + h_size > size:
             break
 
         section_byte = h_count & 0xFF
@@ -560,6 +610,9 @@ def rebuild_mot_sections(data, ctx):
             hands_count += 1
         else:
             node_idx = 0
+
+        # tracce nuove: float (0x22) nei blocchi di tipo 01, int16 (0x12) in quelli di tipo 02
+        ctx.new_fmt = 0x22 if h_type == 0x80000001 else NEW_TRACK_FMT
 
         section_end = pos + h_size
         node_pos = pos + 20
@@ -614,13 +667,17 @@ def _build_new_section(ctx, slot, loop_bytes, frame_start, frame_end):
                         ctx.tracks_const_skipped += 1
                     continue
 
-                t_type = 0x80000000 | (NEW_TRACK_FMT << 16) | t_id
+                t_type = 0x80000000 | (ctx.new_fmt << 16) | t_id
                 if const:
-                    kb = (struct.pack("<hhhh", 0, _clamp_i16(frame_start), 0, 0) +
-                          struct.pack("<hhhh", 0, _clamp_i16(frame_end), 0, 0))
+                    if ctx.new_fmt == 0x22:
+                        kb = (struct.pack("<ffff", 0.0, float(frame_start), 0.0, 0.0) +
+                              struct.pack("<ffff", 0.0, float(frame_end), 0.0, 0.0))
+                    else:
+                        kb = (struct.pack("<hhhh", 0, _clamp_i16(frame_start), 0, 0) +
+                              struct.pack("<hhhh", 0, _clamp_i16(frame_end), 0, 0))
                     nkeys = 2
                 else:
-                    kb = _encode_keys(ctx, NEW_TRACK_FMT, keys, node_name, prop, idx,
+                    kb = _encode_keys(ctx, ctx.new_fmt, keys, node_name, prop, idx,
                                       _div_for(node_idx, prop))
                     nkeys = len(keys)
                     real = True
@@ -637,7 +694,7 @@ def _build_new_section(ctx, slot, loop_bytes, frame_start, frame_end):
 
     if not real:
         return None
-    header = struct.pack("<III", 0x80000002, len(nodes), 20 + len(body)) + loop_bytes
+    header = struct.pack("<III", ctx.block_type, len(nodes), 20 + len(body)) + loop_bytes
     # h_count: per il blocco usiamo il numero di nodi (0x0A, 0x0C, 0x06)
     assert len(nodes) == sec_byte
     return header + bytes(body)
@@ -665,6 +722,7 @@ def _get_active_armature():
 
 class BINRowItem(PropertyGroup):
     label: StringProperty(name="Animazione")
+    tip: StringProperty(name="Dettagli")
     row_index: IntProperty()
     modified: BoolProperty(
         name="Modificata",
@@ -699,6 +757,22 @@ class BINSTUDIO_UL_rows(UIList):
         layout.label(text=prefix + item.label, icon="ANIM")
 
 
+def _draw_details(layout, rows, index):
+    """Dettagli (offset e dimensione di ogni blocco) dell'animazione selezionata."""
+    if not rows or not (0 <= index < len(rows)):
+        return
+    col = layout.column(align=True)
+    for line in rows[index].tip.split("\n"):
+        col.label(text=line)
+
+
+class BINStudioMultiItem(PropertyGroup):
+    label: StringProperty()
+    path: StringProperty()
+    kind: StringProperty()                    # "FULL" o "PARTIAL"
+    include: BoolProperty(name="Includi", default=True)
+
+
 class BINStudioProps(PropertyGroup):
     bin_path: StringProperty(
         name="File .bin",
@@ -717,6 +791,24 @@ class BINStudioProps(PropertyGroup):
     )
     rows2: CollectionProperty(type=BINRowItem)
     row_index2: IntProperty(default=0, update=_on_row_selection2)
+    multi_dir: StringProperty(
+        name="Cartella bin",
+        description="Cartella con i .bin in cui cercare l'animazione (senza sottocartelle)",
+        subtype='DIR_PATH'
+    )
+    multi_out_dir: StringProperty(
+        name="Cartella output",
+        description="Cartella in cui salvare i bin modificati (se e' quella dei bin originali, li sovrascrive)",
+        subtype='DIR_PATH'
+    )
+    multi_rows: CollectionProperty(type=BINStudioMultiItem)
+    multi_index: IntProperty(default=0)
+
+    delete_slot: EnumProperty(
+        name="Blocco",
+        description="Blocco dell'animazione in anteprima da eliminare",
+        items=lambda self, context: _delete_block_items(self, context),
+    )
     replace_scope: EnumProperty(
         name="Sostituisci",
         description="Quali blocchi dell'animazione del principale vengono sostituiti",
@@ -747,9 +839,44 @@ def _rebuild_entry_bytes(entry):
     entry["bytes"] = b"".join(bytes(CACHED_BIN[p:p + s]) for p, s in entry["blocks"])
 
 
+PART_OF_SB = {0x0A: "lower", 0x0B: "upper", 0x0C: "upper", 0x0D: "upper", 0x06: "face", 0x04: "hand"}
+
+
+def _entry_parts(e):
+    """Per ogni blocco dell'animazione: la parte (lower/upper/face/hand) secondo il byte della sezione,
+    NON secondo lo slot della tabella (es. in sp_029 ID 0x193 un lower sta nello slot hand1)."""
+    out, off = [], 0
+    for _p, size in e["blocks"]:
+        out.append(PART_OF_SB.get(e["bytes"][off + 4], "?"))
+        off += size
+    return out
+
+
 def _row_label(e):
-    e["label"] = f"anim_{e['anim_no']:03d} ({e['section_count']} section)"
-    return f"{e['label']}  [{len(e['bytes'])}B]"
+    idp = f"0x{e['anim_id']:03X} [{e['bank']}] " if e.get("anim_id") is not None else ""
+    tys = {struct.unpack_from("<I", e["bytes"], sum(sz for _p, sz in e["blocks"][:i]))[0]
+           for i in range(len(e["blocks"]))}
+    t1 = (" [tipo 01]" if tys == {0x80000001} else " [tipo 01+02]" if len(tys) > 1 else "")
+    e["label"] = f"{idp}anim_{e['anim_no']:03d} ({e['section_count']} section){t1}"
+    return f"{e['label']}  [{len(e['bytes'])}B]  @0x{e['blocks'][0][0]:X}"
+
+
+def _row_tip(e):
+    """Tooltip: offset (esadecimale) e dimensione di ogni blocco dell'animazione."""
+    lines = [f"{e['label']}  (riga tabella {e['table_row']})"]
+    if e.get("anim_id") is not None:
+        lines.append(f"ID 0x{e['anim_id']:X} ({e['anim_id']}) - banco {e['bank']}, sezione {e['section']}, record {e['record']}")
+    for slot, part, (ptr, size) in zip(e["block_slots"], _entry_parts(e), e["blocks"]):
+        name = part if part != "?" else f"slot{slot}"
+        if SLOT_NAMES[slot] != part and part != "?":
+            name += f" (slot {SLOT_NAMES[slot]})"
+        lines.append(f"{name}: @0x{ptr:X}  ({size} byte, fine 0x{ptr + size:X})")
+    return "\n".join(lines)
+
+
+def _set_row(item, e):
+    item.label = _row_label(e)
+    item.tip = _row_tip(e)
 
 
 def _read_slot(row, slot):
@@ -831,7 +958,7 @@ SLOT_NAMES = ["lower", "upper", "face", "hand", "hand"]
 def _parse_mot_sections(mot):
     """
     Divide un .mot nelle sue sezioni e le assegna agli slot della tabella:
-    0x0A -> lower, 0x0C/0x0D -> upper, 0x06 -> face, 0x04 -> prima hand (slot 3)
+    0x0A -> lower, 0x0B/0x0C/0x0D -> upper, 0x06 -> face, 0x04 -> prima hand (slot 3)
     e seconda hand (slot 4). Ritorna {slot: byte_sezione} (byte invariati).
     Solleva ValueError se il file non e' valido o contiene tipi non gestiti (mostri).
     """
@@ -845,12 +972,12 @@ def _parse_mot_sections(mot):
         if pos + 20 > size:
             raise ValueError("dati finali non validi nel .mot")
         h_type, h_count, h_size, _l, _lf = struct.unpack_from("<IIIIf", mot, pos)
-        if h_type != 0x80000002 or h_size < 20 or pos + h_size > size:
+        if h_type not in BLOCK_TYPES or h_size < 20 or pos + h_size > size:
             raise ValueError(f"sezione non valida all'offset {pos}")
         sb = h_count & 0xFF
         if sb == 0x0A:
             slot = 0
-        elif sb in (0x0C, 0x0D):
+        elif sb in (0x0B, 0x0C, 0x0D):
             slot = 1
         elif sb == 0x06:
             slot = 2
@@ -877,6 +1004,64 @@ def _table_cell_counts():
             if v not in (0, 0xFFFFFFFF):
                 counts[v] = counts.get(v, 0) + 1
     return counts
+
+
+_DELETE_ITEMS = [("-1", "(nessun blocco)", "")]    # l'elenco deve restare referenziato (limite di Blender)
+
+
+def _delete_block_items(self, context):
+    """Voci del menu 'Elimina blocco': i blocchi dell'animazione selezionata nel bin principale."""
+    global _DELETE_ITEMS
+    items = []
+    try:
+        props = context.scene.bin_studio
+        if CACHED_ENTRIES and CACHED_BIN is not None and props.rows:
+            e = CACHED_ENTRIES[max(0, min(props.row_index, len(CACHED_ENTRIES) - 1))]
+            counts = _table_cell_counts()
+            for slot, part, (ptr, size) in zip(e["block_slots"], _entry_parts(e), e["blocks"]):
+                shared = "  [condiviso]" if counts.get(ptr, 0) > 1 else ""
+                items.append((str(slot), f"{part} (slot {SLOT_NAMES[slot]}) @0x{ptr:X} - {size} B{shared}",
+                              "Elimina questo blocco dall'animazione"))
+    except Exception:
+        items = []
+    _DELETE_ITEMS = items or [("-1", "(nessun blocco)", "")]
+    return _DELETE_ITEMS
+
+
+def delete_block(idx, slot):
+    """
+    Elimina dal bin in memoria il blocco 'slot' dell'animazione CACHED_ENTRIES[idx]:
+    scrive FFFFFFFF nello slot della tabella e, se nessun'altra riga usa il blocco, toglie i suoi
+    byte dal file riscrivendo gli offset successivi. Un blocco condiviso resta nel file.
+    Se era l'ultimo blocco l'animazione viene tolta da CACHED_ENTRIES.
+    Ritorna un dict {part, size, shared, removed_entry}. Lancia ValueError se non si puo'.
+    """
+    entry = CACHED_ENTRIES[idx]
+    row = entry["table_row"]
+    if slot not in entry["block_slots"]:
+        raise ValueError("il blocco scelto non fa piu' parte dell'animazione")
+    if not all(CACHED_BIN[p + 4] in KNOWN_SECTION_BYTES for p, _s in entry["blocks"]):
+        raise ValueError("animazione di tipo mostro: non gestita")
+    k = entry["block_slots"].index(slot)
+    ptr, size = entry["blocks"][k]
+    if _read_slot(row, slot) != ptr:
+        raise ValueError("la tabella non corrisponde al blocco: operazione annullata")
+    part = _entry_parts(entry)[k]
+    shared = _table_cell_counts().get(ptr, 0) > 1
+    last = len(entry["blocks"]) == 1
+
+    struct.pack_into("<I", CACHED_BIN, CACHED_DESC_START + 20 * row + 4 * slot, 0xFFFFFFFF)
+    keep = [(sl, b) for sl, b in zip(entry["block_slots"], entry["blocks"]) if sl != slot]
+    entry["block_slots"] = [sl for sl, _b in keep]
+    entry["blocks"] = [b for _sl, b in keep]
+    entry["section_count"] = len(keep)
+    if shared:
+        _rebuild_entry_bytes(entry)                         # i byte restano nel file: li usano altre righe
+    else:
+        _apply_edits({ptr: (size, b"")}, {}, row, entry)    # toglie il blocco, riscrive gli offset
+    if last:
+        CACHED_ENTRIES.remove(entry)
+    return {"part": part, "size": size, "shared": shared, "removed_entry": last}
 
 
 def plan_replace(mot, entry, row, only_slots=None):
@@ -911,6 +1096,33 @@ def plan_replace(mot, entry, row, only_slots=None):
         new_slots = {s: b[:12] + loop_bytes + b[20:] for s, b in new_slots.items()}
         fix_kept = False
 
+    # Slot reali della destinazione: un blocco puo' stare in uno slot "non suo" (es. un lower nello
+    # slot hand1): si sostituisce quello, senza creare un duplicato nello slot canonico.
+    present = {}
+    for sl, part in zip(entry["block_slots"], _entry_parts(entry)):
+        present.setdefault(part, []).append(sl)
+    taken, remap_slot = set(), {}
+    for c in sorted(new_slots):
+        part = PART_OF_SB[new_slots[c][4]]
+        existing = present.get(part, [])
+        k = (c - 3) if part == "hand" else 0
+        if len(existing) > k and existing[k] not in taken:
+            t = existing[k]
+        else:
+            order = [3, 4, 0, 1, 2] if part == "hand" else [c] + [x for x in (0, 1, 2, 3, 4) if x != c]
+            free = [x for x in order if x not in taken and _read_slot(row, x) in (0, 0xFFFFFFFF)]
+            if not free:
+                raise ValueError(f"nessuno slot libero per il blocco {part}")
+            t = free[0]
+        taken.add(t)
+        remap_slot[c] = t
+    new_slots = {remap_slot[c]: b for c, b in new_slots.items()}
+    names = {}
+    for t, b in new_slots.items():
+        names[t] = PART_OF_SB[b[4]]
+    for sl, part in zip(entry["block_slots"], _entry_parts(entry)):
+        names.setdefault(sl, part)
+
     desired = dict(new_slots)         # slot -> byte del blocco da scrivere
     loop_fixed = []
     if fix_kept:
@@ -935,7 +1147,7 @@ def plan_replace(mot, entry, row, only_slots=None):
         pair = known.get(slot)
         if pair is None or pair[0] != cur:
             creates[slot] = newb                         # blocco non riconosciuto: non lo modifico
-            warnings.append(f"slot {SLOT_NAMES[slot]}: blocco non riconosciuto, sostituito con uno nuovo in coda")
+            warnings.append(f"{names.get(slot, SLOT_NAMES[slot])}: blocco non riconosciuto, sostituito con uno nuovo in coda")
             continue
         if counts.get(cur, 0) > 1:
             creates[slot] = newb                         # condiviso: isolo
@@ -946,7 +1158,7 @@ def plan_replace(mot, entry, row, only_slots=None):
             edits[ptr] = (size, newb)
 
     info = {"replaced": sorted(new_slots), "kept": sorted(set(entry["block_slots"]) - set(new_slots)),
-            "isolated": isolated, "loop_fixed": loop_fixed, "added": added}
+            "isolated": isolated, "loop_fixed": loop_fixed, "added": added, "names": names}
     return edits, creates, warnings, info
 
 
@@ -979,7 +1191,7 @@ class BINSTUDIO_OT_load_bin(Operator):
         props.rows.clear()
         for e in CACHED_ENTRIES:
             item = props.rows.add()
-            item.label = _row_label(e)
+            _set_row(item, e)
             item.row_index = e["table_row"]
             item.modified = False
 
@@ -1075,6 +1287,8 @@ class BINSTUDIO_OT_save_anim(Operator):
 
         # --- 1) rigenera i blocchi esistenti ---
         sections, complete = rebuild_mot_sections(entry["bytes"], ctx)
+        ctx.block_type = _block_type(entry["bytes"])      # blocchi nuovi: stesso tipo del primo blocco
+        ctx.new_fmt = 0x22 if ctx.block_type == 0x80000001 else NEW_TRACK_FMT
         if not complete or len(sections) != len(entry["blocks"]):
             self.report({'ERROR'}, "Struttura del blocco non riconosciuta: salvataggio annullato.")
             return {'CANCELLED'}
@@ -1091,9 +1305,12 @@ class BINSTUDIO_OT_save_anim(Operator):
         first_ptr = entry["blocks"][0][0]
         loop_bytes = bytes(CACHED_BIN[first_ptr + 12:first_ptr + 20])
         is_known = all(CACHED_BIN[p + 4] in KNOWN_SECTION_BYTES for p, _s in entry["blocks"])
+        parts_here = set(_entry_parts(entry))
         for slot in (0, 1, 2):
             if _read_slot(row, slot) not in (0, 0xFFFFFFFF):
                 continue   # slot occupato (anche se il blocco non e' tra quelli riconosciuti)
+            if SLOT_SPECS[slot][0] in parts_here:
+                continue   # la parte esiste gia' in un altro slot (es. lower nello slot hand1)
             sec = _build_new_section(ctx, slot, loop_bytes, scene.frame_start, scene.frame_end)
             if not sec:
                 continue
@@ -1127,7 +1344,7 @@ class BINSTUDIO_OT_save_anim(Operator):
                 props.rows[i].modified = True
         for i, e in enumerate(CACHED_ENTRIES):
             if i < len(props.rows):
-                props.rows[i].label = _row_label(e)
+                _set_row(props.rows[i], e)
 
         parts = [f"{entry['label']}: {len(edits)} blocchi riscritti",
                  f"keyframe {ctx.keys_before} -> {ctx.keys_after}"]
@@ -1210,9 +1427,9 @@ class BINSTUDIO_OT_replace_mot(Operator, ImportHelper):
         props.rows[idx].modified = True
         for i, e in enumerate(CACHED_ENTRIES):
             if i < len(props.rows):
-                props.rows[i].label = _row_label(e)
+                _set_row(props.rows[i], e)
 
-        names = lambda slots: ", ".join(SLOT_NAMES[s] for s in slots) or "-"
+        names = lambda slots: ", ".join(info["names"].get(s, SLOT_NAMES[s]) for s in slots) or "-"
         parts = [f"{label}: sostituiti [{names(info['replaced'])}]", f"mantenuti [{names(info['kept'])}]"]
         if info["isolated"]:
             parts.append(f"blocchi condivisi isolati [{names(info['isolated'])}] (le altre anim non cambiano)")
@@ -1269,7 +1486,7 @@ class BINSTUDIO_OT_load_bin2(Operator):
         props.rows2.clear()
         for e in CACHED2_ENTRIES:
             item = props.rows2.add()
-            item.label = _row_label(e)
+            _set_row(item, e)
             item.row_index = e["table_row"]
             item.modified = False
 
@@ -1382,9 +1599,9 @@ class BINSTUDIO_OT_replace_from_src(Operator):
         props.rows[idx].modified = True
         for i, e in enumerate(CACHED_ENTRIES):
             if i < len(props.rows):
-                props.rows[i].label = _row_label(e)
+                _set_row(props.rows[i], e)
 
-        names = lambda slots: ", ".join(SLOT_NAMES[s] for s in slots) or "-"
+        names = lambda slots: ", ".join(info["names"].get(s, SLOT_NAMES[s]) for s in slots) or "-"
         parts = [f"{label} <- [sec] {src['label']} ({SCOPE_NAMES[scope]})",
                  f"sostituiti [{names(info['replaced'])}]"]
         if info["added"]:
@@ -1404,6 +1621,356 @@ class BINSTUDIO_OT_replace_from_src(Operator):
             bpy.ops.binstudio.load_motion_row()
         except Exception as ex:
             self.report({'WARNING'}, f"Animazione sostituita ma non ricaricata: {ex}")
+        return {'FINISHED'}
+
+
+# ============================================================
+# SOSTITUZIONE MULTI-BIN (cerca la stessa animazione in altri .bin)
+# ============================================================
+
+MULTI_SRC = None   # {"label": str, "slots": {slot: byte}} dell'animazione cercata
+
+
+def _entry_slots(e):
+    """{parte: byte del blocco} di un'animazione; le parti sono lower, upper, face, hand1, hand2
+    (secondo il byte della sezione, non lo slot della tabella)."""
+    out, pos, hands = {}, 0, 0
+    for part, (_p, size) in zip(_entry_parts(e), e["blocks"]):
+        if part == "hand":
+            hands += 1
+            part = f"hand{hands}"
+        out[part] = bytes(e["bytes"][pos:pos + size])
+        pos += size
+    return out
+
+
+def _match_entry(e, src_slots):
+    """
+    Confronta l'animazione 'e' con quella cercata (src_slots = {slot: byte}).
+    - 'FULL': tutti i blocchi cercati sono presenti e identici (blocchi in piu' in 'e' ammessi);
+    - 'PARTIAL': combaciano solo alcuni dei blocchi cercati, almeno lower o upper;
+    - None: nessuna corrispondenza.
+    Ritorna (tipo, [slot uguali]).
+    """
+    mine = _entry_slots(e)
+    same = [k for k, b in sorted(src_slots.items()) if mine.get(k) == b]
+    if len(same) == len(src_slots):
+        return "FULL", same
+    if any(k in ("lower", "upper") for k in same):
+        return "PARTIAL", same
+    return None, same
+
+
+def _list_bins(folder):
+    """Tutti i .bin direttamente dentro 'folder' (senza ricorsione)."""
+    try:
+        names = sorted(os.listdir(folder), key=str.lower)
+    except OSError:
+        return []
+    return [os.path.join(folder, n) for n in names
+            if n.lower().endswith(".bin") and os.path.isfile(os.path.join(folder, n))]
+
+
+class BINSTUDIO_UL_multi(UIList):
+    def draw_item(self, ctx, layout, data, item, icon, active_data, active_prop, index):
+        layout.prop(item, "include", text=item.label)
+
+
+class BINSTUDIO_OT_multi_search(Operator):
+    bl_idname = "binstudio.multi_search"
+    bl_label = "Cerca animazione in bin(s)"
+    bl_description = (
+        "Cerca l'animazione in anteprima in tutti i .bin della cartella scelta, senza entrare nelle "
+        "sottocartelle. Corrisponde se i suoi blocchi sono identici (blocchi in piu' nel bin sono "
+        "ammessi); se combacia solo lower o solo upper la corrispondenza e' parziale. "
+        "Non modifica nessun file"
+    )
+
+    def execute(self, context):
+        global MULTI_SRC
+        props = context.scene.bin_studio
+        folder = bpy.path.abspath(props.multi_dir)
+        if not folder or not os.path.isdir(folder):
+            self.report({'ERROR'}, "Scegli una cartella valida in cui cercare i .bin.")
+            return {'CANCELLED'}
+
+        # animazione in anteprima: principale o secondario
+        if SHOWING_SRC and CACHED2_ENTRIES and props.rows2:
+            entries, idx, where = CACHED2_ENTRIES, props.row_index2, "secondario"
+        elif CACHED_ENTRIES and props.rows:
+            entries, idx, where = CACHED_ENTRIES, props.row_index, "principale"
+        else:
+            self.report({'ERROR'}, "Carica un .bin e seleziona un'animazione.")
+            return {'CANCELLED'}
+        src = entries[max(0, min(idx, len(entries) - 1))]
+
+        try:
+            _parse_mot_sections(src["bytes"])
+        except ValueError as ex:
+            self.report({'ERROR'}, f"Animazione non gestita: {ex}")
+            return {'CANCELLED'}
+
+        src_slots = _entry_slots(src)
+        paths = _list_bins(folder)
+        if not paths:
+            self.report({'ERROR'}, "Nessun file .bin nella cartella.")
+            return {'CANCELLED'}
+
+        props.multi_rows.clear()
+        unreadable, total, n_partial = [], 0, 0
+        for path in paths:
+            result = read_bin_entries(path)
+            if not result:
+                unreadable.append(os.path.basename(path))
+                continue
+            full, part = [], []
+            for e in result[0]:
+                kind, same = _match_entry(e, src_slots)
+                if kind == "FULL":
+                    full.append((e, same))
+                elif kind == "PARTIAL":
+                    part.append((e, same))
+            name = os.path.basename(path)
+            for kind, hits in (("FULL", full), ("PARTIAL", part)):
+                if not hits:
+                    continue
+                rows = ", ".join(
+                    f"r{e['table_row']}" + (f" 0x{e['anim_id']:X}" if e.get("anim_id") is not None else "")
+                    + f" @0x{e['blocks'][0][0]:X}"
+                    + ("" if kind == "FULL" else " [" + "+".join(same) + "]")
+                    for e, same in hits[:3])
+                if len(hits) > 3:
+                    rows += ", ..."
+                item = props.multi_rows.add()
+                item.path = path
+                item.kind = kind
+                if kind == "FULL":
+                    total += len(hits)
+                    item.label = f"{name}  ({len(hits)}): {rows}"
+                    item.include = True
+                else:
+                    n_partial += len(hits)
+                    item.label = f"PARZIALE  {name}  ({len(hits)}): {rows}"
+                    item.include = False
+
+        MULTI_SRC = {"label": f"[{where}] {src['label']}", "slots": src_slots}
+        n_full = sum(1 for it in props.multi_rows if it.kind == "FULL")
+        msg = f"{MULTI_SRC['label']}: trovata in {n_full} bin su {len(paths)} ({total} corrispondenze)"
+        self.report({'INFO'}, msg)
+        if n_partial:
+            self.report({'WARNING'}, f"{n_partial} corrispondenze PARZIALI (combacia solo lower o solo upper): "
+                                     "controllale prima di includerle (sono deselezionate)")
+        if unreadable:
+            self.report({'WARNING'}, "Non leggibili/ignorati: " + ", ".join(unreadable[:8]))
+        return {'FINISHED'}
+
+
+class BINSTUDIO_OT_multi_replace(Operator, ImportHelper):
+    bl_idname = "binstudio.multi_replace"
+    bl_label = "Rimpiazza animazione con .mot"
+    bl_description = (
+        "Sostituisce con un .mot l'animazione trovata in tutti i bin selezionati e salva i bin "
+        "modificati nella cartella di output. Se e' la stessa cartella dei bin, i file vengono "
+        "sovrascritti (utile per sostituire piu' animazioni di seguito); al primo "
+        "salvataggio sopra un file esistente ne crea una copia .bak. "
+        "Gli offset di ogni bin vengono riscritti"
+    )
+
+    filename_ext = ".mot"
+    filter_glob: StringProperty(default="*.mot", options={'HIDDEN'})
+
+    def invoke(self, context, event):
+        props = context.scene.bin_studio
+        err = self._check(props)
+        if err:
+            self.report({'ERROR'}, err)
+            return {'CANCELLED'}
+        folder = bpy.path.abspath(props.multi_dir)
+        if folder:
+            self.filepath = folder + os.sep
+        context.window_manager.fileselect_add(self)
+        return {'RUNNING_MODAL'}
+
+    @staticmethod
+    def _check(props):
+        if MULTI_SRC is None or not props.multi_rows:
+            return "Esegui prima \"Cerca animazione in bin(s)\" (nessun risultato)."
+        if not any(it.include for it in props.multi_rows):
+            return "Seleziona almeno un bin tra i risultati."
+        if not bpy.path.abspath(props.multi_out_dir):
+            return "Scegli la cartella di output."
+        return None
+
+    def execute(self, context):
+        global CACHED_ENTRIES, CACHED_BIN, CACHED_DESC_START, CACHED_TABLE_ROWS
+        props = context.scene.bin_studio
+        err = BINSTUDIO_OT_multi_replace._check(props)
+        if err:
+            self.report({'ERROR'}, err)
+            return {'CANCELLED'}
+
+        try:
+            with open(self.filepath, "rb") as f:
+                mot = f.read()
+            _parse_mot_sections(mot)          # validazione prima di toccare qualsiasi file
+        except (OSError, ValueError) as ex:
+            self.report({'ERROR'}, f"Replace annullato: {ex}")
+            return {'CANCELLED'}
+
+        out_dir = bpy.path.abspath(props.multi_out_dir)
+        try:
+            os.makedirs(out_dir, exist_ok=True)
+        except OSError as ex:
+            self.report({'ERROR'}, f"Impossibile creare la cartella di output: {ex}")
+            return {'CANCELLED'}
+
+        src_slots = MULTI_SRC["slots"]
+        saved = (CACHED_ENTRIES, CACHED_BIN, CACHED_DESC_START, CACHED_TABLE_ROWS)
+        written, unchanged, failed, backups = [], [], [], []
+        n_rows = 0
+        kinds_by_path = {}
+        for it in props.multi_rows:
+            if it.include:
+                kinds_by_path.setdefault(it.path, set()).add(it.kind)
+        try:
+            for path, kinds in kinds_by_path.items():
+                name = os.path.basename(path)
+                result = read_bin_entries(path)
+                if not result:
+                    failed.append(f"{name} (illeggibile)")
+                    continue
+                entries, data, ds, nr = result
+                CACHED_ENTRIES, CACHED_BIN = entries, bytearray(data)
+                CACHED_DESC_START, CACHED_TABLE_ROWS = ds, nr
+                targets = [e for e in entries if _match_entry(e, src_slots)[0] in kinds]
+                if not targets:
+                    failed.append(f"{name} (animazione non piu' presente)")
+                    continue
+                done = 0
+                try:
+                    for e in targets:
+                        edits, creates, _w, _i = plan_replace(mot, e, e["table_row"])
+                        if edits or creates:
+                            _apply_edits(edits, creates, e["table_row"], e)
+                            done += 1
+                    if not done:
+                        unchanged.append(name)
+                        continue
+                    dest = os.path.join(out_dir, name)
+                    if os.path.isfile(dest) and not os.path.exists(dest + ".bak"):
+                        shutil.copy2(dest, dest + ".bak")      # backup solo la prima volta
+                        backups.append(name + ".bak")
+                    with open(dest, "wb") as f:
+                        f.write(CACHED_BIN)
+                except (ValueError, OSError) as ex:
+                    failed.append(f"{name} ({ex})")
+                    continue
+                written.append(name)
+                n_rows += done
+        finally:
+            CACHED_ENTRIES, CACHED_BIN, CACHED_DESC_START, CACHED_TABLE_ROWS = saved
+
+        self.report({'INFO'}, f"{MULTI_SRC['label']}: {len(written)} bin scritti in \"{out_dir}\" "
+                              f"({n_rows} animazioni sostituite)")
+        if backups:
+            self.report({'INFO'}, f"Backup creati (prima sovrascrittura): {', '.join(backups[:8])}")
+        if unchanged:
+            self.report({'INFO'}, "Gia' uguali al .mot, non scritti: " + ", ".join(unchanged[:8]))
+        if failed:
+            self.report({'WARNING'}, "Non scritti: " + " | ".join(failed[:8]))
+        return {'FINISHED'} if written or unchanged else {'CANCELLED'}
+
+
+class BINSTUDIO_OT_delete_block(Operator):
+    bl_idname = "binstudio.delete_block"
+    bl_label = "Elimina blocco"
+    bl_description = (
+        "Elimina dall'animazione in anteprima il blocco scelto (lower, upper, face, hand): scrive "
+        "FFFFFFFF nello slot della tabella e toglie i byte del blocco dal file, riscrivendo gli offset. "
+        "Un blocco condiviso con altre animazioni resta nel file. Temporaneo: il file su disco non viene toccato"
+    )
+
+    @staticmethod
+    def _context(context):
+        props = context.scene.bin_studio
+        if not CACHED_ENTRIES or CACHED_BIN is None or not props.rows:
+            return props, None, None, "Nessun .bin caricato."
+        if SHOWING_SRC:
+            return props, None, None, ("Stai visualizzando un'animazione del bin secondario: "
+                                       "seleziona (o ricarica) un'animazione del bin principale.")
+        idx = max(0, min(props.row_index, len(CACHED_ENTRIES) - 1))
+        try:
+            slot = int(props.delete_slot)
+        except (TypeError, ValueError):
+            slot = -1
+        if slot not in CACHED_ENTRIES[idx]["block_slots"]:
+            return props, idx, None, "Scegli il blocco da eliminare."
+        return props, idx, slot, None
+
+    def invoke(self, context, event):
+        _props, _idx, _slot, err = BINSTUDIO_OT_delete_block._context(context)
+        if err:
+            self.report({'ERROR'}, err)
+            return {'CANCELLED'}
+        return context.window_manager.invoke_props_dialog(self, width=480)
+
+    def draw(self, context):
+        props, idx, slot, err = BINSTUDIO_OT_delete_block._context(context)
+        col = self.layout.column(align=True)
+        if err:
+            col.label(text=err, icon='ERROR')
+            return
+        e = CACHED_ENTRIES[idx]
+        k = e["block_slots"].index(slot)
+        ptr, size = e["blocks"][k]
+        part = _entry_parts(e)[k]
+        shared = _table_cell_counts().get(ptr, 0) > 1
+        col.label(text=f"Eliminare il blocco {part} (slot {SLOT_NAMES[slot]}) di {e['label']}?")
+        col.label(text="Nella tabella lo slot diventa FFFFFFFF.")
+        if shared:
+            col.label(text="Il blocco e' condiviso con altre animazioni: i suoi byte restano nel file.", icon='INFO')
+        else:
+            col.label(text=f"I {size} byte del blocco vengono tolti dal file e gli offset riscritti.")
+        if len(e["blocks"]) == 1:
+            col.label(text="ATTENZIONE: e' l'ultimo blocco, l'animazione resta vuota e sparisce dalla lista.", icon='ERROR')
+
+    def execute(self, context):
+        props, idx, slot, err = BINSTUDIO_OT_delete_block._context(context)
+        if err:
+            self.report({'ERROR'}, err)
+            return {'CANCELLED'}
+        label = CACHED_ENTRIES[idx]["label"]
+        try:
+            info = delete_block(idx, slot)
+        except ValueError as ex:
+            self.report({'ERROR'}, f"Eliminazione annullata: {ex}")
+            return {'CANCELLED'}
+
+        sc = context.scene
+        sc.bin_studio_loading = True              # niente anteprima automatica durante gli aggiornamenti
+        try:
+            if info["removed_entry"]:
+                props.rows.remove(idx)
+            for i, e in enumerate(CACHED_ENTRIES):
+                if i < len(props.rows):
+                    _set_row(props.rows[i], e)
+            if not info["removed_entry"]:
+                props.rows[idx].modified = True
+            if CACHED_ENTRIES:
+                props.row_index = max(0, min(idx, len(CACHED_ENTRIES) - 1))
+        finally:
+            sc.bin_studio_loading = False
+
+        msg = f"{label}: eliminato il blocco {info['part']}"
+        msg += " (resta nel file: usato da altre animazioni)" if info["shared"] else f" ({info['size']} byte tolti dal file)"
+        if info["removed_entry"]:
+            msg += " - animazione ora vuota, tolta dalla lista"
+        self.report({'INFO'}, msg)
+        if CACHED_ENTRIES:
+            try:
+                bpy.ops.binstudio.load_motion_row()
+            except Exception as ex:
+                self.report({'WARNING'}, f"Blocco eliminato ma anteprima non ricaricata: {ex}")
         return {'FINISHED'}
 
 
@@ -1455,70 +2022,160 @@ class BINSTUDIO_OT_save_bin_file(Operator, ExportHelper):
 # PANNELLO UI
 # ============================================================
 
-class BINSTUDIO_PT_panel(Panel):
-    bl_label      = "BIN Animation Studio"
-    bl_idname     = "BINSTUD_PT_panel"
+class _BinStudioPanelBase:
     bl_space_type = "VIEW_3D"
     bl_region_type = "UI"
-    bl_category   = "BIN Studio"
+    bl_category = "BIN Studio"
+
+
+class BINSTUDIO_PT_panel(_BinStudioPanelBase, Panel):
+    """Pannello principale: stato generale. Le sezioni sono sotto-pannelli nativi di Blender
+    (clic sull'intestazione = apri/chiudi, Ctrl+clic = apri solo quella e chiudi le altre)."""
+    bl_label = "BIN Animation Studio"
+    bl_idname = "BINSTUD_PT_panel"
 
     def draw(self, context):
-        sc    = context.scene
-        props = sc.bin_studio
+        props = context.scene.bin_studio
         layout = self.layout
-
-        layout.prop(props, "bin_path", text="")
-        layout.operator("binstudio.load_bin", icon='FILE_REFRESH', text="Analizza .bin")
-
         arm = _get_active_armature()
         if arm:
             layout.label(text=f"Rig attivo: {arm.name}", icon="ARMATURE_DATA")
         else:
             layout.label(text="Nessun rig selezionato!", icon="ERROR")
-
+        col = layout.column(align=True)
         if props.rows:
-            layout.separator()
-            layout.template_list("BINSTUDIO_UL_rows", "", props, "rows", props, "row_index", rows=10)
+            n_mod = sum(1 for r in props.rows if r.modified)
+            col.label(text=f"Principale: {len(props.rows)} animazioni" + (f"  (* {n_mod} modificate)" if n_mod else ""),
+                      icon='FILE_BLEND')
+        if props.rows2:
+            col.label(text=f"Secondario: {len(props.rows2)} animazioni", icon='LINKED')
+        if props.rows and props.rows2:
+            col.label(text="In anteprima: " + ("bin secondario" if SHOWING_SRC else "bin principale"), icon='INFO')
 
+
+class BINSTUDIO_PT_main(_BinStudioPanelBase, Panel):
+    bl_label = "Bin principale"
+    bl_idname = "BINSTUD_PT_main"
+    bl_parent_id = "BINSTUD_PT_panel"
+
+    def draw(self, context):
+        props = context.scene.bin_studio
+        layout = self.layout
+        layout.prop(props, "bin_path", text="")
+        layout.operator("binstudio.load_bin", icon='FILE_REFRESH', text="Analizza .bin")
+        if props.rows:
+            layout.template_list("BINSTUDIO_UL_rows", "", props, "rows", props, "row_index", rows=8)
             row = layout.row(align=True)
             row.operator("binstudio.step_row", text="Prev", icon='TRIA_LEFT').delta = -1
             row.operator("binstudio.step_row", text="Next", icon='TRIA_RIGHT').delta = 1
-
             layout.prop(props, "autoplay")
             layout.operator("binstudio.load_motion_row", text="Ricarica Animazione", icon='PLAY')
-            layout.operator("binstudio.replace_mot", text="Replace da .mot...", icon='IMPORT')
 
-            layout.separator()
-            box = layout.box()
-            box.label(text="Salvataggio", icon='FILE_TICK')
-            col = box.column(align=True)
-            col.operator("binstudio.save_anim", text="Salva animazione (temporaneo)", icon='FILE_TICK')
-            col.operator("binstudio.save_bin_file", text="Salva .bin su disco...", icon='EXPORT')
 
-            n_mod = sum(1 for r in props.rows if r.modified)
-            if n_mod:
-                box.label(text=f"* {n_mod} modificate, non salvate su disco", icon='ERROR')
+class BINSTUDIO_PT_details(_BinStudioPanelBase, Panel):
+    bl_label = "Dettagli animazione"
+    bl_idname = "BINSTUD_PT_details"
+    bl_parent_id = "BINSTUD_PT_main"
+    bl_options = {'DEFAULT_CLOSED'}
 
-            layout.label(text=f"{len(props.rows)} animazioni nel bin")
+    @classmethod
+    def poll(cls, context):
+        return bool(context.scene.bin_studio.rows)
 
-        # --- bin secondario (sorgente) ---
-        layout.separator()
-        box2 = layout.box()
-        box2.label(text="Bin secondario (sorgente)", icon='LINKED')
-        box2.prop(props, "bin2_path", text="")
-        box2.operator("binstudio.load_bin2", icon='FILE_REFRESH', text="Analizza bin secondario")
+    def draw(self, context):
+        props = context.scene.bin_studio
+        _draw_details(self.layout, props.rows, props.row_index)
+
+
+class BINSTUDIO_PT_edit(_BinStudioPanelBase, Panel):
+    bl_label = "Modifica e salvataggio"
+    bl_idname = "BINSTUD_PT_edit"
+    bl_parent_id = "BINSTUD_PT_panel"
+
+    @classmethod
+    def poll(cls, context):
+        return bool(context.scene.bin_studio.rows)
+
+    def draw(self, context):
+        props = context.scene.bin_studio
+        layout = self.layout
+        layout.operator("binstudio.replace_mot", text="Replace da .mot...", icon='IMPORT')
+
+        box = layout.box()
+        box.label(text="Elimina blocco", icon='TRASH')
+        box.prop(props, "delete_slot", text="")
+        box.operator("binstudio.delete_block", text="Elimina blocco", icon='X')
+
+        col = layout.column(align=True)
+        col.operator("binstudio.save_anim", text="Salva animazione (temporaneo)", icon='FILE_TICK')
+        col.operator("binstudio.save_bin_file", text="Salva .bin su disco...", icon='EXPORT')
+        n_mod = sum(1 for r in props.rows if r.modified)
+        if n_mod:
+            layout.label(text=f"* {n_mod} modificate, non salvate su disco", icon='ERROR')
+
+
+class BINSTUDIO_PT_sec(_BinStudioPanelBase, Panel):
+    bl_label = "Bin secondario (sorgente)"
+    bl_idname = "BINSTUD_PT_sec"
+    bl_parent_id = "BINSTUD_PT_panel"
+    bl_options = {'DEFAULT_CLOSED'}
+
+    def draw(self, context):
+        props = context.scene.bin_studio
+        layout = self.layout
+        layout.prop(props, "bin2_path", text="")
+        layout.operator("binstudio.load_bin2", icon='FILE_REFRESH', text="Analizza bin secondario")
         if props.rows2:
-            box2.template_list("BINSTUDIO_UL_rows", "src", props, "rows2", props, "row_index2", rows=6)
-            r2 = box2.row(align=True)
+            layout.template_list("BINSTUDIO_UL_rows", "src", props, "rows2", props, "row_index2", rows=6)
+            r2 = layout.row(align=True)
             r2.operator("binstudio.step_row2", text="Prev", icon='TRIA_LEFT').delta = -1
             r2.operator("binstudio.step_row2", text="Next", icon='TRIA_RIGHT').delta = 1
-            box2.operator("binstudio.load_motion_row2", text="Anteprima", icon='PLAY')
-            box2.label(text="In anteprima: " + ("bin secondario" if SHOWING_SRC else "bin principale"), icon='INFO')
+            layout.operator("binstudio.load_motion_row2", text="Anteprima", icon='PLAY')
             if props.rows:
-                col2 = box2.column(align=True)
+                col2 = layout.column(align=True)
                 col2.prop(props, "replace_scope", text="")
                 col2.operator("binstudio.replace_from_src", text="Replace nel bin principale", icon='IMPORT')
-            box2.label(text=f"{len(props.rows2)} animazioni nel bin secondario")
+
+
+class BINSTUDIO_PT_sec_details(_BinStudioPanelBase, Panel):
+    bl_label = "Dettagli animazione"
+    bl_idname = "BINSTUD_PT_sec_details"
+    bl_parent_id = "BINSTUD_PT_sec"
+    bl_options = {'DEFAULT_CLOSED'}
+
+    @classmethod
+    def poll(cls, context):
+        return bool(context.scene.bin_studio.rows2)
+
+    def draw(self, context):
+        props = context.scene.bin_studio
+        _draw_details(self.layout, props.rows2, props.row_index2)
+
+
+class BINSTUDIO_PT_multi(_BinStudioPanelBase, Panel):
+    bl_label = "Sostituisci in piu' bin"
+    bl_idname = "BINSTUD_PT_multi"
+    bl_parent_id = "BINSTUD_PT_panel"
+    bl_options = {'DEFAULT_CLOSED'}
+
+    @classmethod
+    def poll(cls, context):
+        props = context.scene.bin_studio
+        return bool(props.rows or props.rows2)
+
+    def draw(self, context):
+        props = context.scene.bin_studio
+        layout = self.layout
+        layout.label(text="Cerca l'animazione in anteprima:")
+        layout.prop(props, "multi_dir", text="")
+        layout.operator("binstudio.multi_search", text="Cerca animazione in bin(s)", icon='VIEWZOOM')
+        if props.multi_rows:
+            layout.label(text=(MULTI_SRC or {}).get("label", ""), icon='ANIM')
+            layout.template_list("BINSTUDIO_UL_multi", "", props, "multi_rows", props, "multi_index", rows=5)
+            layout.prop(props, "multi_out_dir", text="Output")
+            layout.operator("binstudio.multi_replace", text="Rimpiazza animazione con .mot", icon='IMPORT')
+        elif MULTI_SRC is not None:
+            layout.label(text="Nessuna corrispondenza trovata", icon='INFO')
 
 
 # ============================================================
@@ -1527,6 +2184,7 @@ class BINSTUDIO_PT_panel(Panel):
 
 classes = [
     BINRowItem,
+    BINStudioMultiItem,
     BINSTUDIO_UL_rows,
     BINStudioProps,
     BINSTUDIO_OT_load_bin,
@@ -1538,8 +2196,18 @@ classes = [
     BINSTUDIO_OT_load_motion_row2,
     BINSTUDIO_OT_step_row2,
     BINSTUDIO_OT_replace_from_src,
+    BINSTUDIO_OT_delete_block,
+    BINSTUDIO_UL_multi,
+    BINSTUDIO_OT_multi_search,
+    BINSTUDIO_OT_multi_replace,
     BINSTUDIO_OT_save_bin_file,
     BINSTUDIO_PT_panel,
+    BINSTUDIO_PT_main,
+    BINSTUDIO_PT_details,
+    BINSTUDIO_PT_edit,
+    BINSTUDIO_PT_sec,
+    BINSTUDIO_PT_sec_details,
+    BINSTUDIO_PT_multi,
 ]
 
 

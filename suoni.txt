@@ -1,0 +1,42 @@
+# suoni.txt - eventi sonori delle animazioni custom
+# Una riga per evento:   ID   fotogramma   evento
+#   ID          = ID dell'animazione (0x75, 0x132, ...)
+#   fotogramma  = numero del fotogramma in Blender (si parte da 0)
+#   evento      = passo | trascino | fiato_corsa | fiato_ferito | hurt | hurt_bad | pianta | tosse | sforzo
+#                 oppure:  voce N [varianti]   (N = ID della voce nel banco del personaggio)
+# Gli ID che non compaiono qui usano i suoni copiati dall'animazione originale.
+# Se un ID compare qui, i suoni copiati per quell'ID NON suonano piu': scrivi tutti gli eventi che vuoi.
+#
+# Esempi (cancella il # per usarli):
+# 0x75   12   passo
+# 0x75   40   trascino
+# 0x75   60   fiato_corsa
+# 0x132  4    passo
+# 0x132  11   passo
+
+
+0x6d  25 passo
+0x6d  80 passo
+0x6e 17 passo
+0x6e 58 passo
+0x6f 20 passo
+0x6f 25 fiato_corsa
+0x6f 55 passo
+0x70 30 fiato_ferito
+0x71 30 fiato_ferito
+0x72 35 fiato_corsa
+0x72 50 trascino
+0x73 35 fiato_corsa
+0x73 50 trascino
+0x75 40 passo
+0x75 30 fiato_corsa
+0x75 65 passo
+0x75 108 passo
+0x76 35 fiato_ferito
+0x76 30 passo
+0x76 80 passo
+0x77 35 fiato_corsa
+0x77 22 passo
+0x77 50 passo
+0x132 10 passo
+0x133 10 passo
